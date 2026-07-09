@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
+import { useAuth, useClerk } from "@clerk/react";
 import { Check, Flame, TrendingUp, RotateCcw, Circle } from "lucide-react";
 
 const CATS = {
@@ -50,29 +51,35 @@ function dayLabel(d) {
   return d.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
 }
 
-async function apiGetDay(dateStr) {
-  const res = await fetch(`/api/day?date=${dateStr}`);
+async function apiGetDay(dateStr, token) {
+  const res = await fetch(`/api/day?date=${dateStr}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
   if (!res.ok) throw new Error("erreur API day");
   const json = await res.json();
   return json.data || {};
 }
 
-async function apiSetDay(dateStr, data) {
+async function apiSetDay(dateStr, data, token) {
   await fetch("/api/day", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({ date: dateStr, data }),
   });
 }
 
-async function apiGetWeek() {
-  const res = await fetch(`/api/week`);
+async function apiGetWeek(token) {
+  const res = await fetch(`/api/week`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
   if (!res.ok) throw new Error("erreur API week");
   const json = await res.json();
   return json.rows || [];
 }
 
 export default function Dashboard() {
+  const { getToken } = useAuth();
+  const { signOut } = useClerk();
   const [now, setNow] = useState(new Date());
   const dow = now.getDay();
   const blocks = buildBlocks(dow);
@@ -89,17 +96,19 @@ export default function Dashboard() {
 
   const loadToday = useCallback(async () => {
     try {
-      const data = await apiGetDay(dateStr);
+      const token = await getToken();
+      const data = await apiGetDay(dateStr, token);
       setChecked(data);
     } catch {
       setChecked({});
     }
-  }, [dateStr]);
+  }, [dateStr, getToken]);
 
   const loadWeek = useCallback(async () => {
     let rows = [];
     try {
-      rows = await apiGetWeek();
+      const token = await getToken();
+      rows = await apiGetWeek(token);
     } catch {
       rows = [];
     }
@@ -140,7 +149,8 @@ export default function Dashboard() {
     const next = { ...checked, [id]: !checked[id] };
     setChecked(next);
     try {
-      await apiSetDay(dateStr, next);
+      const token = await getToken();
+      await apiSetDay(dateStr, next, token);
     } catch {}
     loadWeek();
   };
@@ -148,7 +158,8 @@ export default function Dashboard() {
   const resetToday = async () => {
     setChecked({});
     try {
-      await apiSetDay(dateStr, {});
+      const token = await getToken();
+      await apiSetDay(dateStr, {}, token);
     } catch {}
     loadWeek();
   };
@@ -176,7 +187,12 @@ export default function Dashboard() {
             <div style={{ fontSize: 12, letterSpacing: 2, color: "#64748B", textTransform: "uppercase" }}>Emploi du temps</div>
             <div className="sg" style={{ fontSize: 26, fontWeight: 700, textTransform: "capitalize" }}>{dayLabel(now)}</div>
           </div>
-          <div style={{ fontSize: 22, fontWeight: 700, fontVariantNumeric: "tabular-nums", color: "#3B82F6" }}>{nowStr}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            <div style={{ fontSize: 22, fontWeight: 700, fontVariantNumeric: "tabular-nums", color: "#3B82F6" }}>{nowStr}</div>
+            <button onClick={() => signOut()} style={{ fontSize: 11, color: "#64748B", background: "none", border: "1px solid #22262D", borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}>
+              Déconnexion
+            </button>
+          </div>
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, margin: "20px 0" }}>
