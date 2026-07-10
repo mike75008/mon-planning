@@ -1,7 +1,7 @@
 import { ClerkProvider, Show, SignIn } from "@clerk/react";
 import React from "react";
 import ReactDOM from "react-dom/client";
-import Dashboard from "./Dashboard.jsx";
+import App from "./App.jsx";
 
 const publishableKey =
   window.__ENV__?.VITE_CLERK_PUBLISHABLE_KEY ||
@@ -17,7 +17,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     <ClerkProvider publishableKey={publishableKey}>
       <Show when="signed-in">
-        <Dashboard />
+        <App />
       </Show>
       <Show when="signed-out">
         <div style={{ display: "flex", justifyContent: "center", alignItems: "center", minHeight: "100vh", background: "#0B0D10" }}>

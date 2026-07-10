@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useAuth, useClerk } from "@clerk/react";
-import { Check, Flame, TrendingUp, RotateCcw, Circle } from "lucide-react";
+import { Check, Flame, TrendingUp, RotateCcw, Circle, ChevronLeft, ChevronRight } from "lucide-react";
 
 const CATS = {
   sport:   { label: "Sport",              color: "#EF4444", bg: "#2A1414" },
@@ -51,6 +51,11 @@ function dayLabel(d) {
   return d.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
 }
 
+function parseDateKey(key) {
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
 async function apiGetDay(dateStr, token) {
   const res = await fetch(`/api/day?date=${dateStr}`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -77,15 +82,23 @@ async function apiGetWeek(token) {
   return json.rows || [];
 }
 
-export default function Dashboard() {
+export default function Dashboard({ isAdmin, onOpenAdmin }) {
   const { getToken } = useAuth();
   const { signOut } = useClerk();
   const [now, setNow] = useState(new Date());
-  const dow = now.getDay();
+  const [viewDate, setViewDate] = useState(new Date());
+  const [searchDate, setSearchDate] = useState("");
+  const [editingRows, setEditingRows] = useState(new Set());
+
+  const todayStr = todayKey(now);
+  const dateStr = todayKey(viewDate);
+  const dow = viewDate.getDay();
   const blocks = buildBlocks(dow);
-  const dateStr = todayKey(now);
+  const isPastDay = dateStr < todayStr;
+  const isToday = dateStr === todayStr;
 
   const [checked, setChecked] = useState({});
+  const [todayChecked, setTodayChecked] = useState({});
   const [weekStats, setWeekStats] = useState([]);
   const [streak, setStreak] = useState(0);
 
@@ -94,7 +107,7 @@ export default function Dashboard() {
     return () => clearInterval(t);
   }, []);
 
-  const loadToday = useCallback(async () => {
+  const loadDay = useCallback(async () => {
     try {
       const token = await getToken();
       const data = await apiGetDay(dateStr, token);
@@ -103,6 +116,16 @@ export default function Dashboard() {
       setChecked({});
     }
   }, [dateStr, getToken]);
+
+  const loadTodayCard = useCallback(async () => {
+    try {
+      const token = await getToken();
+      const data = await apiGetDay(todayStr, token);
+      setTodayChecked(data);
+    } catch {
+      setTodayChecked({});
+    }
+  }, [todayStr, getToken]);
 
   const loadWeek = useCallback(async () => {
     let rows = [];
@@ -138,25 +161,64 @@ export default function Dashboard() {
       else break;
     }
     setStreak(s);
-  }, []);
+  }, [getToken]);
 
   useEffect(() => {
-    loadToday();
+    setEditingRows(new Set());
+    loadDay();
+  }, [loadDay, dateStr]);
+
+  useEffect(() => {
+    loadTodayCard();
+  }, [loadTodayCard]);
+
+  useEffect(() => {
     loadWeek();
-  }, [loadToday, loadWeek]);
+  }, [loadWeek]);
+
+  const goPrevDay = () => {
+    const d = new Date(viewDate);
+    d.setDate(d.getDate() - 1);
+    setViewDate(d);
+  };
+
+  const goNextDay = () => {
+    if (isToday) return;
+    const d = new Date(viewDate);
+    d.setDate(d.getDate() + 1);
+    if (todayKey(d) > todayStr) return;
+    setViewDate(d);
+  };
+
+  const goToDateKey = (key) => {
+    if (!key) return;
+    if (key > todayStr) return;
+    setViewDate(parseDateKey(key));
+  };
 
   const toggle = async (id) => {
+    const canEdit = !isPastDay || editingRows.has(id);
+    if (!canEdit) return;
     const next = { ...checked, [id]: !checked[id] };
     setChecked(next);
     try {
       const token = await getToken();
       await apiSetDay(dateStr, next, token);
     } catch {}
+    if (dateStr === todayStr) setTodayChecked(next);
     loadWeek();
   };
 
+  const enableEditRow = (e, id) => {
+    e.stopPropagation();
+    setEditingRows((prev) => new Set([...prev, id]));
+  };
+
   const resetToday = async () => {
+    if (!isToday) return;
     setChecked({});
+    setTodayChecked({});
+    setEditingRows(new Set());
     try {
       const token = await getToken();
       await apiSetDay(dateStr, {}, token);
@@ -164,14 +226,42 @@ export default function Dashboard() {
     loadWeek();
   };
 
+  const todayBlocks = buildBlocks(now.getDay());
   const requiredBlocks = blocks.filter((b) => !b.optional && CATS[b.cat].label !== "Pause");
+  const todayRequiredBlocks = todayBlocks.filter((b) => !b.optional && CATS[b.cat].label !== "Pause");
   const doneCount = requiredBlocks.filter((b) => checked[b.id]).length;
   const totalCount = requiredBlocks.length;
-  const pctToday = totalCount ? Math.round((doneCount / totalCount) * 100) : 0;
+  const pctToday = todayRequiredBlocks.length
+    ? Math.round((todayRequiredBlocks.filter((b) => todayChecked[b.id]).length / todayRequiredBlocks.length) * 100)
+    : 0;
+  const todayDoneCount = todayRequiredBlocks.filter((b) => todayChecked[b.id]).length;
 
   const nowStr = now.toTimeString().slice(0, 5);
-  const isCurrent = (b) => nowStr >= b.start && nowStr < b.end;
-  const isPast = (b) => nowStr >= b.end;
+  const isCurrent = (b) => isToday && nowStr >= b.start && nowStr < b.end;
+  const isPast = (b) => isToday && nowStr >= b.end;
+
+  const navBtn = {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    border: "1px solid #22262D",
+    background: "#14171B",
+    color: "#94A3B8",
+    cursor: "pointer",
+  };
+
+  const dateInput = {
+    fontSize: 12,
+    padding: "6px 10px",
+    borderRadius: 8,
+    border: "1px solid #22262D",
+    background: "#14171B",
+    color: "#E7E9EC",
+    fontFamily: "'JetBrains Mono', monospace",
+  };
 
   return (
     <div style={{ minHeight: "100vh", background: "#0B0D10", color: "#E7E9EC", fontFamily: "'JetBrains Mono', monospace" }}>
@@ -185,21 +275,62 @@ export default function Dashboard() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 6 }}>
           <div>
             <div style={{ fontSize: 12, letterSpacing: 2, color: "#64748B", textTransform: "uppercase" }}>Emploi du temps</div>
-            <div className="sg" style={{ fontSize: 26, fontWeight: 700, textTransform: "capitalize" }}>{dayLabel(now)}</div>
+            <div className="sg" style={{ fontSize: 26, fontWeight: 700, textTransform: "capitalize" }}>{dayLabel(viewDate)}</div>
+            {!isToday && (
+              <div style={{ fontSize: 11, color: "#64748B", marginTop: 4 }}>
+                {isPastDay ? "Jour passé — lecture seule (bouton Modifier sur chaque ligne)" : "Consultation"}
+              </div>
+            )}
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <div style={{ fontSize: 22, fontWeight: 700, fontVariantNumeric: "tabular-nums", color: "#3B82F6" }}>{nowStr}</div>
+            {isAdmin && (
+              <button onClick={onOpenAdmin} style={{ fontSize: 11, color: "#3B82F6", background: "none", border: "1px solid #3B82F6", borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}>
+                Administration
+              </button>
+            )}
             <button onClick={() => signOut()} style={{ fontSize: 11, color: "#64748B", background: "none", border: "1px solid #22262D", borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}>
               Déconnexion
             </button>
           </div>
         </div>
 
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, margin: "14px 0 18px" }}>
+          <button onClick={goPrevDay} style={navBtn} title="Jour précédent">
+            <ChevronLeft size={18} />
+          </button>
+          <input
+            type="date"
+            value={dateStr}
+            max={todayStr}
+            onChange={(e) => goToDateKey(e.target.value)}
+            style={dateInput}
+            title="Calendrier"
+          />
+          <button onClick={goNextDay} disabled={isToday} style={{ ...navBtn, opacity: isToday ? 0.35 : 1, cursor: isToday ? "default" : "pointer" }} title="Jour suivant">
+            <ChevronRight size={18} />
+          </button>
+          <input
+            type="date"
+            value={searchDate}
+            max={todayStr}
+            onChange={(e) => setSearchDate(e.target.value)}
+            style={{ ...dateInput, marginLeft: 4 }}
+            title="Rechercher une date"
+          />
+          <button
+            onClick={() => goToDateKey(searchDate)}
+            style={{ fontSize: 11, color: "#94A3B8", background: "#14171B", border: "1px solid #22262D", borderRadius: 8, padding: "7px 12px", cursor: "pointer" }}
+          >
+            Rechercher
+          </button>
+        </div>
+
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, margin: "20px 0" }}>
           <div style={{ background: "#14171B", border: "1px solid #22262D", borderRadius: 12, padding: "14px 12px" }}>
             <div style={{ fontSize: 11, color: "#64748B", marginBottom: 4 }}>AUJOURD'HUI</div>
             <div className="sg" style={{ fontSize: 22, fontWeight: 700 }}>{pctToday}%</div>
-            <div style={{ fontSize: 11, color: "#64748B" }}>{doneCount}/{totalCount} blocs</div>
+            <div style={{ fontSize: 11, color: "#64748B" }}>{todayDoneCount}/{todayRequiredBlocks.length} blocs</div>
           </div>
           <div style={{ background: "#14171B", border: "1px solid #22262D", borderRadius: 12, padding: "14px 12px" }}>
             <div style={{ fontSize: 11, color: "#64748B", marginBottom: 4, display: "flex", alignItems: "center", gap: 4 }}>
@@ -221,28 +352,34 @@ export default function Dashboard() {
 
         <div style={{ display: "flex", gap: 4, marginBottom: 24 }}>
           {weekStats.map((d, i) => {
-            const isToday = todayKey(d.date) === dateStr;
+            const isTodayBar = todayKey(d.date) === todayStr;
+            const isSelected = todayKey(d.date) === dateStr;
             return (
               <div key={i} style={{ flex: 1, textAlign: "center" }}>
                 <div style={{ fontSize: 9, color: "#64748B", marginBottom: 3, textTransform: "uppercase" }}>
                   {d.date.toLocaleDateString("fr-FR", { weekday: "short" }).slice(0, 2)}
                 </div>
-                <div
+                <button
+                  type="button"
+                  onClick={() => setViewDate(new Date(d.date))}
                   style={{
+                    width: "100%",
                     height: 34,
                     borderRadius: 6,
                     background: d.pct >= 70 ? "#16341F" : d.pct > 0 ? "#2A2408" : "#181B20",
-                    border: isToday ? "1px solid #3B82F6" : "1px solid transparent",
+                    border: isSelected ? "1px solid #3B82F6" : isTodayBar ? "1px solid #64748B" : "1px solid transparent",
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
                     fontSize: 10,
                     fontWeight: 700,
                     color: d.pct >= 70 ? "#4ADE80" : d.pct > 0 ? "#EAB308" : "#3A3F47",
+                    cursor: "pointer",
+                    padding: 0,
                   }}
                 >
                   {d.pct}
-                </div>
+                </button>
               </div>
             );
           })}
@@ -253,6 +390,7 @@ export default function Dashboard() {
             const cat = CATS[b.cat];
             const done = !!checked[b.id];
             const active = isCurrent(b);
+            const canEdit = !isPastDay || editingRows.has(b.id);
             return (
               <button
                 key={b.id}
@@ -267,8 +405,8 @@ export default function Dashboard() {
                   borderRadius: 10,
                   border: active ? `1px solid ${cat.color}` : "1px solid #1E2127",
                   background: done ? cat.bg : "#111318",
-                  opacity: !done && isPast(b) && !active ? 0.55 : 1,
-                  cursor: "pointer",
+                  opacity: !done && isPast(b) && !active ? 0.55 : !canEdit && !done ? 0.75 : 1,
+                  cursor: canEdit ? "pointer" : "default",
                   transition: "all 0.15s ease",
                 }}
               >
@@ -283,6 +421,24 @@ export default function Dashboard() {
                   </div>
                   <div style={{ fontSize: 10.5, color: cat.color, marginTop: 1 }}>{cat.label}</div>
                 </div>
+                {isPastDay && !editingRows.has(b.id) && (
+                  <button
+                    type="button"
+                    onClick={(e) => enableEditRow(e, b.id)}
+                    style={{
+                      fontSize: 10,
+                      color: "#93C5FD",
+                      background: "none",
+                      border: "1px solid #3B82F6",
+                      borderRadius: 6,
+                      padding: "4px 8px",
+                      cursor: "pointer",
+                      flexShrink: 0,
+                    }}
+                  >
+                    Modifier
+                  </button>
+                )}
                 {done ? (
                   <div style={{ width: 22, height: 22, borderRadius: "50%", background: cat.color, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                     <Check size={13} color="#0B0D10" strokeWidth={3} />

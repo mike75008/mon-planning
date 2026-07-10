@@ -1,6 +1,4 @@
 // Serveur Express — à déployer sur Render (Web Service)
-// Variables d'environnement requises :
-//   NEON_DATABASE_URL, CLERK_SECRET_KEY, VITE_CLERK_PUBLISHABLE_KEY
 const express = require("express");
 const path = require("path");
 const { neon } = require("@neondatabase/serverless");
@@ -14,30 +12,109 @@ function pickClerkPublishableKey() {
   return candidates.find((k) => typeof k === "string" && k.startsWith("pk_")) || "";
 }
 
-// Clerk Express lit CLERK_PUBLISHABLE_KEY — on synchronise depuis VITE_ si besoin
 const publishableKey = pickClerkPublishableKey();
 if (publishableKey) {
   process.env.CLERK_PUBLISHABLE_KEY = publishableKey;
 }
 
-if (!process.env.NEON_DATABASE_URL) {
-  console.error("NEON_DATABASE_URL manquante");
-}
-if (!process.env.CLERK_SECRET_KEY) {
-  console.error("CLERK_SECRET_KEY manquante");
-}
+if (!process.env.NEON_DATABASE_URL) console.error("NEON_DATABASE_URL manquante");
+if (!process.env.CLERK_SECRET_KEY) console.error("CLERK_SECRET_KEY manquante");
 if (!publishableKey) {
-  console.error("Clé publishable Clerk introuvable (VITE_CLERK_PUBLISHABLE_KEY ou CLERK_PUBLISHABLE_KEY)");
+  console.error("Clé publishable Clerk introuvable");
 } else {
   console.log("Clerk publishable key OK:", publishableKey.slice(0, 12) + "...");
 }
 
 const sql = neon(process.env.NEON_DATABASE_URL);
 
+async function clerkApi(path, options = {}) {
+  const res = await fetch(`https://api.clerk.com${path}`, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${process.env.CLERK_SECRET_KEY}`,
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+  });
+  const text = await res.text();
+  let body = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    body = text;
+  }
+  if (!res.ok) {
+    const msg = body?.errors?.[0]?.message || body?.message || res.statusText;
+    throw new Error(msg);
+  }
+  return body;
+}
+
+async function logActivity(userId, action, details = {}) {
+  try {
+    await sql`
+      INSERT INTO activity_logs (user_id, action, details)
+      VALUES (${userId}, ${action}, ${JSON.stringify(details)})
+    `;
+  } catch (err) {
+    console.error("logActivity:", err.message);
+  }
+}
+
+function requiredBlocksForDow(dow) {
+  const CATS = {
+    sport: "Sport",
+    boot: "Lancement",
+    dev: "Dev",
+    pause: "Pause",
+    market: "Marketing / IA",
+    admin: "Admin identitaire",
+    music: "Musique",
+    permis: "Permis",
+    appart: "Appartement",
+    close: "Clôture",
+  };
+  const ADMIN_ROTATION = {
+    1: "CV propre",
+    2: "LinkedIn propre",
+    3: "Réseaux perso musique",
+    4: "Nouveaux comptes appli",
+    5: "Nettoyage global / révision",
+    6: "Libre — rattrapage",
+    0: "Libre — rattrapage",
+  };
+  const blocks = [
+    { id: "sport", optional: true, cat: "sport" },
+    { id: "boot", optional: false, cat: "boot" },
+    { id: "dev1", optional: false, cat: "dev" },
+    { id: "p1", optional: false, cat: "pause" },
+    { id: "market", optional: false, cat: "market" },
+    { id: "lunch", optional: false, cat: "pause" },
+    { id: "admin", optional: false, cat: "admin" },
+    { id: "dev2", optional: false, cat: "dev" },
+    { id: "p2", optional: false, cat: "pause" },
+    { id: "music", optional: false, cat: "music" },
+    { id: "permis", optional: false, cat: "permis" },
+    { id: "appart", optional: false, cat: "appart" },
+    { id: "close", optional: false, cat: "close" },
+  ];
+  return blocks.filter((b) => !b.optional && CATS[b.cat] !== "Pause");
+}
+
+function pctFromData(data, dow) {
+  const blocks = requiredBlocksForDow(dow);
+  if (!blocks.length) return 0;
+  const done = blocks.filter((b) => data?.[b.id]).length;
+  return Math.round((done / blocks.length) * 100);
+}
+
+function parseDowFromDate(dateStr) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(y, m - 1, d).getDay();
+}
+
 const app = express();
 app.use(express.json());
-
-// --- Routes publiques (pas de Clerk middleware) ---
 
 app.get("/env-config.js", (_req, res) => {
   res.type("application/javascript");
@@ -49,10 +126,7 @@ app.get("/env-config.js", (_req, res) => {
 const distPath = path.join(__dirname, "..", "dist");
 app.use(express.static(distPath));
 
-// --- API protégée par Clerk ---
-
 const api = express.Router();
-// Sans arguments : lit CLERK_PUBLISHABLE_KEY + CLERK_SECRET_KEY depuis process.env
 api.use(clerkMiddleware());
 
 function requireAuth(req, res, next) {
@@ -61,6 +135,41 @@ function requireAuth(req, res, next) {
   req.userId = userId;
   next();
 }
+
+async function getClerkUser(userId) {
+  return clerkApi(`/v1/users/${userId}`);
+}
+
+async function isUserAdmin(userId) {
+  const user = await getClerkUser(userId);
+  return user?.public_metadata?.role === "admin";
+}
+
+async function requireAdmin(req, res, next) {
+  try {
+    const admin = await isUserAdmin(req.userId);
+    if (!admin) return res.status(403).json({ error: "Accès administrateur requis" });
+    next();
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+api.get("/me", requireAuth, async (req, res) => {
+  try {
+    const user = await getClerkUser(req.userId);
+    const isAdmin = user?.public_metadata?.role === "admin";
+    res.json({
+      userId: req.userId,
+      isAdmin,
+      email: user?.email_addresses?.[0]?.email_address || "",
+      firstName: user?.first_name || "",
+      lastName: user?.last_name || "",
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 api.get("/day", requireAuth, async (req, res) => {
   const { date } = req.query;
@@ -83,6 +192,7 @@ api.post("/day", requireAuth, async (req, res) => {
       ON CONFLICT (user_id, date)
       DO UPDATE SET data = ${JSON.stringify(data)}, updated_at = now()
     `;
+    await logActivity(req.userId, "planning_modifie", { date });
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -103,9 +213,185 @@ api.get("/week", requireAuth, async (req, res) => {
   }
 });
 
+const admin = express.Router();
+admin.use(requireAuth, requireAdmin);
+
+admin.get("/dashboard", async (_req, res) => {
+  try {
+    const usersData = await clerkApi("/v1/users?limit=100&order_by=-created_at");
+    const users = usersData.data || usersData || [];
+    const list = Array.isArray(users) ? users : [];
+
+    const rows = await sql`
+      SELECT user_id, date, data FROM day_status
+      WHERE date >= (CURRENT_DATE - INTERVAL '6 days')
+    `;
+
+    const today = new Date().toISOString().slice(0, 10);
+    let sumPct = 0;
+    let countPct = 0;
+    const perUser = {};
+
+    for (const row of rows) {
+      const dow = parseDowFromDate(row.date);
+      const pct = pctFromData(row.data, dow);
+      if (!perUser[row.user_id]) perUser[row.user_id] = [];
+      perUser[row.user_id].push(pct);
+      sumPct += pct;
+      countPct++;
+    }
+
+    const recentLogs = await sql`
+      SELECT user_id, action, details, created_at
+      FROM activity_logs
+      ORDER BY created_at DESC
+      LIMIT 10
+    `;
+
+    res.json({
+      utilisateursInscrits: list.length,
+      utilisateursActifsAujourdhui: list.filter(
+        (u) => u.last_sign_in_at && u.last_sign_in_at.slice(0, 10) === today
+      ).length,
+      pourcentageMoyenGlobal: countPct ? Math.round(sumPct / countPct) : 0,
+      journauxRecents: recentLogs,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+admin.get("/utilisateurs", async (_req, res) => {
+  try {
+    const usersData = await clerkApi("/v1/users?limit=100&order_by=-created_at");
+    const users = usersData.data || usersData || [];
+    const list = (Array.isArray(users) ? users : []).map((u) => ({
+      id: u.id,
+      prenom: u.first_name || "",
+      nom: u.last_name || "",
+      email: u.email_addresses?.[0]?.email_address || "",
+      inscritLe: u.created_at,
+      derniereConnexion: u.last_sign_in_at || null,
+      compteDesactive: !!u.banned,
+    }));
+    res.json({ utilisateurs: list });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+admin.get("/connexions", async (_req, res) => {
+  try {
+    const usersData = await clerkApi("/v1/users?limit=100&order_by=-last_sign_in_at");
+    const users = usersData.data || usersData || [];
+    const list = (Array.isArray(users) ? users : [])
+      .filter((u) => u.last_sign_in_at)
+      .map((u) => ({
+        id: u.id,
+        prenom: u.first_name || "",
+        nom: u.last_name || "",
+        email: u.email_addresses?.[0]?.email_address || "",
+        derniereConnexion: u.last_sign_in_at,
+      }));
+    res.json({ connexions: list });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+admin.post("/utilisateurs/:id/desactiver", async (req, res) => {
+  try {
+    await clerkApi(`/v1/users/${req.params.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ banned: true }),
+    });
+    await logActivity(req.userId, "compte_desactive", { cible: req.params.id });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+admin.post("/utilisateurs/:id/reactiver", async (req, res) => {
+  try {
+    await clerkApi(`/v1/users/${req.params.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ banned: false }),
+    });
+    await logActivity(req.userId, "compte_reactive", { cible: req.params.id });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+admin.get("/statistiques", async (_req, res) => {
+  try {
+    const usersData = await clerkApi("/v1/users?limit=100");
+    const users = usersData.data || usersData || [];
+    const userMap = Object.fromEntries(
+      (Array.isArray(users) ? users : []).map((u) => [
+        u.id,
+        {
+          prenom: u.first_name || "",
+          nom: u.last_name || "",
+          email: u.email_addresses?.[0]?.email_address || "",
+        },
+      ])
+    );
+
+    const rows = await sql`
+      SELECT user_id, date, data FROM day_status
+      WHERE date >= (CURRENT_DATE - INTERVAL '6 days')
+    `;
+
+    const perUser = {};
+    for (const row of rows) {
+      const dow = parseDowFromDate(row.date);
+      const pct = pctFromData(row.data, dow);
+      if (!perUser[row.user_id]) perUser[row.user_id] = [];
+      perUser[row.user_id].push(pct);
+    }
+
+    const statistiques = Object.entries(perUser).map(([userId, pcts]) => {
+      const info = userMap[userId] || {};
+      const moyenne = pcts.length
+        ? Math.round(pcts.reduce((a, b) => a + b, 0) / pcts.length)
+        : 0;
+      return {
+        utilisateurId: userId,
+        prenom: info.prenom || "",
+        nom: info.nom || "",
+        email: info.email || "",
+        pourcentageMoyenSeptJours: moyenne,
+        joursEnregistres: pcts.length,
+      };
+    });
+
+    res.json({ statistiques });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+admin.get("/journaux", async (_req, res) => {
+  try {
+    const rows = await sql`
+      SELECT id, user_id, action, details, created_at
+      FROM activity_logs
+      ORDER BY created_at DESC
+      LIMIT 200
+    `;
+    res.json({ journaux: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+api.use("/admin", admin);
+
 app.use("/api", api);
 
-// SPA React
 app.get("*", (_req, res) => {
   res.sendFile(path.join(distPath, "index.html"));
 });
