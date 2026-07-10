@@ -6,19 +6,30 @@ const path = require("path");
 const { neon } = require("@neondatabase/serverless");
 const { clerkMiddleware, getAuth } = require("@clerk/express");
 
-const publishableKey =
-  process.env.CLERK_PUBLISHABLE_KEY ||
-  process.env.VITE_CLERK_PUBLISHABLE_KEY;
-const secretKey = process.env.CLERK_SECRET_KEY;
+function pickClerkPublishableKey() {
+  const candidates = [
+    process.env.VITE_CLERK_PUBLISHABLE_KEY,
+    process.env.CLERK_PUBLISHABLE_KEY,
+  ];
+  return candidates.find((k) => typeof k === "string" && k.startsWith("pk_")) || "";
+}
+
+// Clerk Express lit CLERK_PUBLISHABLE_KEY — on synchronise depuis VITE_ si besoin
+const publishableKey = pickClerkPublishableKey();
+if (publishableKey) {
+  process.env.CLERK_PUBLISHABLE_KEY = publishableKey;
+}
 
 if (!process.env.NEON_DATABASE_URL) {
   console.error("NEON_DATABASE_URL manquante");
 }
-if (!secretKey) {
+if (!process.env.CLERK_SECRET_KEY) {
   console.error("CLERK_SECRET_KEY manquante");
 }
 if (!publishableKey) {
-  console.error("CLERK_PUBLISHABLE_KEY ou VITE_CLERK_PUBLISHABLE_KEY manquante");
+  console.error("Clé publishable Clerk introuvable (VITE_CLERK_PUBLISHABLE_KEY ou CLERK_PUBLISHABLE_KEY)");
+} else {
+  console.log("Clerk publishable key OK:", publishableKey.slice(0, 12) + "...");
 }
 
 const sql = neon(process.env.NEON_DATABASE_URL);
@@ -31,7 +42,7 @@ app.use(express.json());
 app.get("/env-config.js", (_req, res) => {
   res.type("application/javascript");
   res.send(
-    `window.__ENV__=${JSON.stringify({ VITE_CLERK_PUBLISHABLE_KEY: publishableKey || "" })};`
+    `window.__ENV__=${JSON.stringify({ VITE_CLERK_PUBLISHABLE_KEY: publishableKey })};`
   );
 });
 
@@ -41,7 +52,8 @@ app.use(express.static(distPath));
 // --- API protégée par Clerk ---
 
 const api = express.Router();
-api.use(clerkMiddleware({ publishableKey, secretKey }));
+// Sans arguments : lit CLERK_PUBLISHABLE_KEY + CLERK_SECRET_KEY depuis process.env
+api.use(clerkMiddleware());
 
 function requireAuth(req, res, next) {
   const { userId } = getAuth(req);
