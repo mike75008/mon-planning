@@ -4,6 +4,7 @@ import { Check, Flame, TrendingUp, RotateCcw, Circle, ChevronLeft, ChevronRight,
 import AttachmentModal from "./AttachmentModal.jsx";
 import SerieRecap from "./SerieRecap.jsx";
 import PlanningAssistant from "./PlanningAssistant.jsx";
+import Chat from "./Chat.jsx";
 import { splitDayData, mergeDayData, attachmentCount } from "./dayData.js";
 
 const CATS = {
@@ -536,6 +537,7 @@ export default function Dashboard({ isAdmin, onOpenAdmin }) {
                 if (dateStr === todayStr) loadTodayCard();
               }}
             />
+            <Chat />
           </div>
         </div>
 
