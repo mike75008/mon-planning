@@ -434,8 +434,17 @@ export default function Dashboard({ isAdmin, onOpenAdmin }) {
             const active = isCurrent(b);
             const canEdit = !isPastDay || editingRows.has(b.id);
             return (
-              <button
+              <div
                 key={b.id}
+                role={canEdit ? "button" : undefined}
+                tabIndex={canEdit ? 0 : undefined}
+                onKeyDown={(e) => {
+                  if (!canEdit) return;
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    toggle(b.id);
+                  }
+                }}
                 onClick={() => toggle(b.id)}
                 style={{
                   display: "flex",
@@ -509,7 +518,7 @@ export default function Dashboard({ isAdmin, onOpenAdmin }) {
                 ) : (
                   <Circle size={20} color="#2A2E36" style={{ flexShrink: 0 }} />
                 )}
-              </button>
+              </div>
             );
           })}
         </div>

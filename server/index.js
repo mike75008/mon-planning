@@ -164,10 +164,22 @@ function weekendDatesFromSunday(sundayStr) {
   return [formatDateKey(sat), formatDateKey(sun)];
 }
 
+function parseDayData(raw) {
+  if (raw == null) return {};
+  if (typeof raw === "string") {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return {};
+    }
+  }
+  return raw;
+}
+
 function collectAttachmentsFromRows(rows) {
   const items = [];
   for (const row of rows) {
-    const att = row.data?._attachments || {};
+    const att = parseDayData(row.data)._attachments || {};
     for (const [blockId, list] of Object.entries(att)) {
       const meta = BLOCK_META[blockId] || { label: blockId, color: "#64748B" };
       for (const item of list) {
@@ -222,8 +234,6 @@ app.get("/env-config.js", (_req, res) => {
 });
 
 const distPath = path.join(__dirname, "..", "dist");
-app.use("/uploads", express.static(uploadsDir));
-app.use(express.static(distPath));
 
 const api = express.Router();
 api.use(clerkMiddleware());
@@ -534,9 +544,27 @@ api.use("/admin", admin);
 
 app.use("/api", api);
 
+app.use("/uploads", express.static(uploadsDir));
+app.use(express.static(distPath));
+
 app.get("*", (_req, res) => {
   res.sendFile(path.join(distPath, "index.html"));
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Serveur lancé sur le port ${PORT}`));
+const server = app.listen(PORT, () => {
+  console.log(`Serveur lancé sur le port ${PORT}`);
+  console.log("API: /api/day, /api/week, /api/recap, /api/upload");
+});
+
+server.on("error", (err) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(
+      `\nPort ${PORT} déjà utilisé — un ancien serveur Node tourne encore.\n` +
+        `Windows : netstat -ano | findstr :${PORT}  puis  taskkill /PID <pid> /F\n` +
+        `Ensuite relance : npm run start:local\n`
+    );
+    process.exit(1);
+  }
+  throw err;
+});
