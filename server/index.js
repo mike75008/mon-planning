@@ -6,18 +6,42 @@ const path = require("path");
 const { neon } = require("@neondatabase/serverless");
 const { clerkMiddleware, getAuth } = require("@clerk/express");
 
-const app = express();
-app.use(express.json());
-app.use(clerkMiddleware());
+const publishableKey =
+  process.env.CLERK_PUBLISHABLE_KEY ||
+  process.env.VITE_CLERK_PUBLISHABLE_KEY;
+const secretKey = process.env.CLERK_SECRET_KEY;
 
 if (!process.env.NEON_DATABASE_URL) {
   console.error("NEON_DATABASE_URL manquante");
 }
-if (!process.env.CLERK_SECRET_KEY) {
+if (!secretKey) {
   console.error("CLERK_SECRET_KEY manquante");
+}
+if (!publishableKey) {
+  console.error("CLERK_PUBLISHABLE_KEY ou VITE_CLERK_PUBLISHABLE_KEY manquante");
 }
 
 const sql = neon(process.env.NEON_DATABASE_URL);
+
+const app = express();
+app.use(express.json());
+
+// --- Routes publiques (pas de Clerk middleware) ---
+
+app.get("/env-config.js", (_req, res) => {
+  res.type("application/javascript");
+  res.send(
+    `window.__ENV__=${JSON.stringify({ VITE_CLERK_PUBLISHABLE_KEY: publishableKey || "" })};`
+  );
+});
+
+const distPath = path.join(__dirname, "..", "dist");
+app.use(express.static(distPath));
+
+// --- API protégée par Clerk ---
+
+const api = express.Router();
+api.use(clerkMiddleware({ publishableKey, secretKey }));
 
 function requireAuth(req, res, next) {
   const { userId } = getAuth(req);
@@ -26,8 +50,7 @@ function requireAuth(req, res, next) {
   next();
 }
 
-// Récupère le statut d'un jour précis : /api/day?date=2026-07-09
-app.get("/api/day", requireAuth, async (req, res) => {
+api.get("/day", requireAuth, async (req, res) => {
   const { date } = req.query;
   if (!date) return res.status(400).json({ error: "date manquante" });
   try {
@@ -38,8 +61,7 @@ app.get("/api/day", requireAuth, async (req, res) => {
   }
 });
 
-// Enregistre/écrase le statut d'un jour : { date, data }
-app.post("/api/day", requireAuth, async (req, res) => {
+api.post("/day", requireAuth, async (req, res) => {
   const { date, data } = req.body || {};
   if (!date) return res.status(400).json({ error: "date manquante" });
   try {
@@ -55,8 +77,7 @@ app.post("/api/day", requireAuth, async (req, res) => {
   }
 });
 
-// Les 7 derniers jours, pour la bande de stats : /api/week
-app.get("/api/week", requireAuth, async (req, res) => {
+api.get("/week", requireAuth, async (req, res) => {
   try {
     const rows = await sql`
       SELECT date, data FROM day_status
@@ -70,22 +91,10 @@ app.get("/api/week", requireAuth, async (req, res) => {
   }
 });
 
-// Injecte la clé Clerk au runtime (Render lit process.env au démarrage, pas seulement au build Vite)
-app.get("/env-config.js", (_req, res) => {
-  const publishableKey =
-    process.env.VITE_CLERK_PUBLISHABLE_KEY ||
-    process.env.CLERK_PUBLISHABLE_KEY ||
-    "";
-  res.type("application/javascript");
-  res.send(
-    `window.__ENV__=${JSON.stringify({ VITE_CLERK_PUBLISHABLE_KEY: publishableKey })};`
-  );
-});
+app.use("/api", api);
 
-// Sert le frontend buildé (Vite -> dist/)
-const distPath = path.join(__dirname, "..", "dist");
-app.use(express.static(distPath));
-app.get("*", (req, res) => {
+// SPA React
+app.get("*", (_req, res) => {
   res.sendFile(path.join(distPath, "index.html"));
 });
 
