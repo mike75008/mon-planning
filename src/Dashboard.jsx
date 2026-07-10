@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useAuth, useClerk } from "@clerk/react";
-import { Check, Flame, TrendingUp, RotateCcw, Circle, ChevronLeft, ChevronRight } from "lucide-react";
+import { Check, Flame, TrendingUp, RotateCcw, Circle, ChevronLeft, ChevronRight, Paperclip } from "lucide-react";
+import AttachmentModal from "./AttachmentModal.jsx";
+import SerieRecap from "./SerieRecap.jsx";
+import { splitDayData, mergeDayData, attachmentCount } from "./dayData.js";
 
 const CATS = {
   sport:   { label: "Sport",              color: "#EF4444", bg: "#2A1414" },
@@ -44,7 +47,10 @@ function buildBlocks(dow) {
 }
 
 function todayKey(d = new Date()) {
-  return d.toISOString().slice(0, 10);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 function dayLabel(d) {
@@ -98,6 +104,8 @@ export default function Dashboard({ isAdmin, onOpenAdmin }) {
   const isToday = dateStr === todayStr;
 
   const [checked, setChecked] = useState({});
+  const [attachments, setAttachments] = useState({});
+  const [attachModal, setAttachModal] = useState(null);
   const [todayChecked, setTodayChecked] = useState({});
   const [weekStats, setWeekStats] = useState([]);
   const [streak, setStreak] = useState(0);
@@ -111,9 +119,12 @@ export default function Dashboard({ isAdmin, onOpenAdmin }) {
     try {
       const token = await getToken();
       const data = await apiGetDay(dateStr, token);
-      setChecked(data);
+      const { checked: c, attachments: att } = splitDayData(data);
+      setChecked(c);
+      setAttachments(att);
     } catch {
       setChecked({});
+      setAttachments({});
     }
   }, [dateStr, getToken]);
 
@@ -121,7 +132,8 @@ export default function Dashboard({ isAdmin, onOpenAdmin }) {
     try {
       const token = await getToken();
       const data = await apiGetDay(todayStr, token);
-      setTodayChecked(data);
+      const { checked: c } = splitDayData(data);
+      setTodayChecked(c);
     } catch {
       setTodayChecked({});
     }
@@ -196,17 +208,47 @@ export default function Dashboard({ isAdmin, onOpenAdmin }) {
     setViewDate(parseDateKey(key));
   };
 
+  const saveDayData = async (nextChecked, nextAttachments) => {
+    try {
+      const token = await getToken();
+      await apiSetDay(dateStr, mergeDayData(nextChecked, nextAttachments), token);
+    } catch {}
+  };
+
   const toggle = async (id) => {
     const canEdit = !isPastDay || editingRows.has(id);
     if (!canEdit) return;
     const next = { ...checked, [id]: !checked[id] };
     setChecked(next);
-    try {
-      const token = await getToken();
-      await apiSetDay(dateStr, next, token);
-    } catch {}
+    await saveDayData(next, attachments);
     if (dateStr === todayStr) setTodayChecked(next);
     loadWeek();
+  };
+
+  const openAttach = (e, block) => {
+    e.stopPropagation();
+    setAttachModal({ blockId: block.id, blockLabel: block.label });
+  };
+
+  const addAttachment = async (item) => {
+    if (!attachModal) return;
+    const entry = {
+      id: crypto.randomUUID(),
+      ...item,
+      createdAt: new Date().toISOString(),
+    };
+    const list = [...(attachments[attachModal.blockId] || []), entry];
+    const nextAtt = { ...attachments, [attachModal.blockId]: list };
+    setAttachments(nextAtt);
+    await saveDayData(checked, nextAtt);
+  };
+
+  const removeAttachment = async (itemId) => {
+    if (!attachModal) return;
+    const list = (attachments[attachModal.blockId] || []).filter((a) => a.id !== itemId);
+    const nextAtt = { ...attachments, [attachModal.blockId]: list };
+    setAttachments(nextAtt);
+    await saveDayData(checked, nextAtt);
   };
 
   const enableEditRow = (e, id) => {
@@ -421,6 +463,27 @@ export default function Dashboard({ isAdmin, onOpenAdmin }) {
                   </div>
                   <div style={{ fontSize: 10.5, color: cat.color, marginTop: 1 }}>{cat.label}</div>
                 </div>
+                <button
+                  type="button"
+                  onClick={(e) => openAttach(e, b)}
+                  title="Trombone — photos, vidéos, liens"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 4,
+                    fontSize: 10,
+                    color: attachmentCount(attachments, b.id) ? "#93C5FD" : "#64748B",
+                    background: "none",
+                    border: attachmentCount(attachments, b.id) ? "1px solid #3B82F6" : "1px solid #22262D",
+                    borderRadius: 6,
+                    padding: "4px 8px",
+                    cursor: "pointer",
+                    flexShrink: 0,
+                  }}
+                >
+                  <Paperclip size={14} />
+                  {attachmentCount(attachments, b.id) > 0 ? attachmentCount(attachments, b.id) : null}
+                </button>
                 {isPastDay && !editingRows.has(b.id) && (
                   <button
                     type="button"
@@ -451,6 +514,8 @@ export default function Dashboard({ isAdmin, onOpenAdmin }) {
           })}
         </div>
 
+        <SerieRecap todayStr={todayStr} dayOfWeek={now.getDay()} />
+
         <button
           onClick={resetToday}
           style={{ marginTop: 20, display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#64748B", background: "none", border: "none", cursor: "pointer", padding: 4 }}
@@ -462,6 +527,17 @@ export default function Dashboard({ isAdmin, onOpenAdmin }) {
           Rotation admin : Lun=CV · Mar=LinkedIn · Mer=Réseaux musique · Jeu=Comptes appli · Ven=Nettoyage
         </div>
       </div>
+
+      {attachModal && (
+        <AttachmentModal
+          blockLabel={attachModal.blockLabel}
+          items={attachments[attachModal.blockId] || []}
+          onClose={() => setAttachModal(null)}
+          onAdd={addAttachment}
+          onRemove={removeAttachment}
+          getToken={getToken}
+        />
+      )}
     </div>
   );
 }

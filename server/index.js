@@ -1,6 +1,8 @@
 // Serveur Express — à déployer sur Render (Web Service)
 const express = require("express");
 const path = require("path");
+const fs = require("fs");
+const multer = require("multer");
 const { neon } = require("@neondatabase/serverless");
 const { clerkMiddleware, getAuth } = require("@clerk/express");
 
@@ -113,6 +115,102 @@ function parseDowFromDate(dateStr) {
   return new Date(y, m - 1, d).getDay();
 }
 
+const BLOCK_META = {
+  sport: { label: "Sport", color: "#EF4444" },
+  boot: { label: "Lancement", color: "#64748B" },
+  dev1: { label: "Dev", color: "#3B82F6" },
+  dev2: { label: "Dev", color: "#3B82F6" },
+  p1: { label: "Pause", color: "#475569" },
+  p2: { label: "Pause", color: "#475569" },
+  lunch: { label: "Déjeuner", color: "#475569" },
+  market: { label: "Marketing / IA", color: "#F97316" },
+  admin: { label: "Admin identitaire", color: "#EAB308" },
+  music: { label: "Musique", color: "#A855F7" },
+  permis: { label: "Permis", color: "#22C55E" },
+  appart: { label: "Appartement", color: "#14B8A6" },
+  close: { label: "Clôture", color: "#94A3B8" },
+};
+
+function formatDateKey(d) {
+  return d.toISOString().slice(0, 10);
+}
+
+function parseDateKey(dateStr) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function formatFrDate(dateStr) {
+  return parseDateKey(dateStr).toLocaleDateString("fr-FR", { day: "numeric", month: "long" });
+}
+
+function weekDatesFromFriday(fridayStr) {
+  const fri = parseDateKey(fridayStr);
+  const mon = new Date(fri);
+  mon.setDate(fri.getDate() - 4);
+  const dates = [];
+  for (let i = 0; i < 5; i++) {
+    const d = new Date(mon);
+    d.setDate(mon.getDate() + i);
+    dates.push(formatDateKey(d));
+  }
+  return dates;
+}
+
+function weekendDatesFromSunday(sundayStr) {
+  const sun = parseDateKey(sundayStr);
+  const sat = new Date(sun);
+  sat.setDate(sun.getDate() - 1);
+  return [formatDateKey(sat), formatDateKey(sun)];
+}
+
+function collectAttachmentsFromRows(rows) {
+  const items = [];
+  for (const row of rows) {
+    const att = row.data?._attachments || {};
+    for (const [blockId, list] of Object.entries(att)) {
+      const meta = BLOCK_META[blockId] || { label: blockId, color: "#64748B" };
+      for (const item of list) {
+        items.push({
+          ...item,
+          date: row.date,
+          blockId,
+          blockLabel: meta.label,
+          color: meta.color,
+        });
+      }
+    }
+  }
+  return items.sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+}
+
+function episodeTitle(period, dates, itemCount) {
+  const start = formatFrDate(dates[0]);
+  const end = formatFrDate(dates[dates.length - 1]);
+  if (period === "week") {
+    return `Épisode — Semaine du ${start} au ${end} (${itemCount} pièce${itemCount > 1 ? "s" : ""})`;
+  }
+  return `Épisode — Week-end du ${start} au ${end} (${itemCount} pièce${itemCount > 1 ? "s" : ""})`;
+}
+
+const uploadsDir = path.join(__dirname, "..", "uploads");
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: uploadsDir,
+    filename: (_req, file, cb) => {
+      const safe = file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
+      cb(null, `${Date.now()}-${safe}`);
+    },
+  }),
+  limits: { fileSize: 15 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype.startsWith("image/") || file.mimetype.startsWith("video/")) cb(null, true);
+    else cb(new Error("Seules les photos et vidéos sont autorisées"));
+  },
+});
+
 const app = express();
 app.use(express.json());
 
@@ -124,6 +222,7 @@ app.get("/env-config.js", (_req, res) => {
 });
 
 const distPath = path.join(__dirname, "..", "dist");
+app.use("/uploads", express.static(uploadsDir));
 app.use(express.static(distPath));
 
 const api = express.Router();
@@ -208,6 +307,49 @@ api.get("/week", requireAuth, async (req, res) => {
       ORDER BY date ASC
     `;
     res.json({ rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+api.post("/upload", requireAuth, (req, res) => {
+  upload.single("file")(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message });
+    if (!req.file) return res.status(400).json({ error: "Fichier manquant" });
+    const type = req.file.mimetype.startsWith("video/") ? "video" : "photo";
+    res.json({ url: `/uploads/${req.file.filename}`, type });
+  });
+});
+
+api.get("/recap", requireAuth, async (req, res) => {
+  const { period, date } = req.query;
+  if (!period || !["week", "weekend"].includes(period)) {
+    return res.status(400).json({ error: "period doit être week ou weekend" });
+  }
+  const refDate = date || new Date().toISOString().slice(0, 10);
+  try {
+    const dates =
+      period === "week" ? weekDatesFromFriday(refDate) : weekendDatesFromSunday(refDate);
+
+    const minDate = dates[0];
+    const maxDate = dates[dates.length - 1];
+    const rows = await sql`
+      SELECT date, data FROM day_status
+      WHERE user_id = ${req.userId}
+      AND date >= ${minDate}
+      AND date <= ${maxDate}
+      ORDER BY date ASC
+    `;
+    const dateSet = new Set(dates);
+    const filtered = rows.filter((r) => dateSet.has(r.date));
+
+    const items = collectAttachmentsFromRows(filtered);
+    res.json({
+      period,
+      dates,
+      titreEpisode: episodeTitle(period, dates, items.length),
+      items,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
