@@ -31,7 +31,7 @@ function badgeCount({ loading, error, recap }) {
   return recap.items.length;
 }
 
-export default function SerieRecap({ todayStr, dayOfWeek }) {
+export default function SerieRecap({ todayStr, dayOfWeek, extraBadges }) {
   const { getToken, isLoaded } = useAuth();
   const [expanded, setExpanded] = useState(false);
   const [period, setPeriod] = useState(() => defaultPeriodForDay(dayOfWeek));
@@ -97,7 +97,12 @@ export default function SerieRecap({ todayStr, dayOfWeek }) {
   const count = badgeCount({ loading, error, recap });
 
   return (
-    <div style={{ marginTop: 20, marginBottom: 4 }}>
+    <div
+      style={{
+        flexBasis: expanded ? "100%" : "auto",
+        width: expanded ? "100%" : "auto",
+      }}
+    >
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
         <button
           type="button"
@@ -150,6 +155,7 @@ export default function SerieRecap({ todayStr, dayOfWeek }) {
             />
           )}
         </button>
+        {extraBadges}
       </div>
 
       {expanded && (

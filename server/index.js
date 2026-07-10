@@ -3,6 +3,7 @@ const express = require("express");
 const path = require("path");
 const fs = require("fs");
 const multer = require("multer");
+const { parsePlanningText, transcribeAudio, applyPlanningActions, localDateKey } = require("./planAssistant");
 const { neon } = require("@neondatabase/serverless");
 const { clerkMiddleware, getAuth } = require("@clerk/express");
 
@@ -223,6 +224,11 @@ const upload = multer({
   },
 });
 
+const audioUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024 },
+});
+
 const app = express();
 app.use(express.json());
 
@@ -360,6 +366,53 @@ api.get("/recap", requireAuth, async (req, res) => {
       titreEpisode: episodeTitle(period, dates, items.length),
       items,
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+api.post("/plan/parse", requireAuth, async (req, res) => {
+  const { text, referenceDate } = req.body || {};
+  if (!text || !String(text).trim()) {
+    return res.status(400).json({ error: "texte manquant" });
+  }
+  try {
+    const result = await parsePlanningText(
+      String(text).trim(),
+      referenceDate || localDateKey()
+    );
+    res.json(result);
+  } catch (err) {
+    if (err.code === "AI_NOT_CONFIGURED") return res.status(503).json({ error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+api.post("/plan/transcribe", requireAuth, (req, res) => {
+  audioUpload.single("audio")(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: err.message });
+    if (!req.file) return res.status(400).json({ error: "audio manquant" });
+    try {
+      const referenceDate = req.body?.referenceDate || localDateKey();
+      const transcript = await transcribeAudio(req.file.buffer, req.file.mimetype);
+      const result = await parsePlanningText(transcript, referenceDate);
+      res.json({ ...result, transcript });
+    } catch (e) {
+      if (e.code === "AI_NOT_CONFIGURED") return res.status(503).json({ error: e.message });
+      res.status(500).json({ error: e.message });
+    }
+  });
+});
+
+api.post("/plan/apply", requireAuth, async (req, res) => {
+  const { actions } = req.body || {};
+  if (!Array.isArray(actions) || !actions.length) {
+    return res.status(400).json({ error: "actions manquantes" });
+  }
+  try {
+    const applied = await applyPlanningActions(sql, req.userId, actions);
+    await logActivity(req.userId, "planning_ia_applique", { dates: applied.map((a) => a.date) });
+    res.json({ ok: true, applied });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -554,7 +607,7 @@ app.get("*", (_req, res) => {
 const PORT = process.env.PORT || 3000;
 const server = app.listen(PORT, () => {
   console.log(`Serveur lancé sur le port ${PORT}`);
-  console.log("API: /api/day, /api/week, /api/recap, /api/upload");
+  console.log("API: /api/day, /api/week, /api/recap, /api/upload, /api/plan/*");
 });
 
 server.on("error", (err) => {

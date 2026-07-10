@@ -3,6 +3,7 @@ import { useAuth, useClerk } from "@clerk/react";
 import { Check, Flame, TrendingUp, RotateCcw, Circle, ChevronLeft, ChevronRight, Paperclip } from "lucide-react";
 import AttachmentModal from "./AttachmentModal.jsx";
 import SerieRecap from "./SerieRecap.jsx";
+import PlanningAssistant from "./PlanningAssistant.jsx";
 import { splitDayData, mergeDayData, attachmentCount } from "./dayData.js";
 
 const CATS = {
@@ -523,7 +524,20 @@ export default function Dashboard({ isAdmin, onOpenAdmin }) {
           })}
         </div>
 
-        <SerieRecap todayStr={todayStr} dayOfWeek={now.getDay()} />
+        <div style={{ marginTop: 20, marginBottom: 4 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-start" }}>
+            <SerieRecap todayStr={todayStr} dayOfWeek={now.getDay()} />
+            <PlanningAssistant
+              todayStr={todayStr}
+              referenceDateStr={dateStr}
+              onApplied={() => {
+                loadDay();
+                loadWeek();
+                if (dateStr === todayStr) loadTodayCard();
+              }}
+            />
+          </div>
+        </div>
 
         <button
           onClick={resetToday}
