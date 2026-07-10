@@ -1,50 +1,64 @@
-# Mon Planning — déploiement Neon + Render
+# Mon Planning — déploiement Neon + Render + Clerk
 
-Ton dashboard, en autonome, avec une vraie base de données et une URL à toi.
+Dashboard personnel avec auth multi-utilisateurs, base Neon et déploiement Render.
 
 ## 1. Créer la base sur Neon
 
-1. Va sur console.neon.tech, crée un projet (ou utilise un projet existant).
-2. Ouvre l'éditeur SQL du projet et colle le contenu de `schema.sql` (une seule table, `day_status`).
-3. Récupère la **connection string** (Dashboard → Connection Details), du genre :
-   `postgresql://user:password@ep-xxxx.neon.tech/dbname?sslmode=require`
-   Garde-la de côté, tu en auras besoin à l'étape 3.
+1. Va sur [console.neon.tech](https://console.neon.tech), crée un projet.
+2. Ouvre l'éditeur SQL et exécute le contenu de `schema.sql`.
+3. **Si tu avais déjà créé l'ancienne table** (sans `user_id`), exécute `schema-migration.sql` à la place.
+4. Récupère la **connection string** (Dashboard → Connection Details).
 
-## 2. Pousser le code sur GitHub
+## 2. Configurer Clerk
 
-Dans ce dossier :
-```bash
-git init
-git add .
-git commit -m "planning initial"
+1. Crée une application sur [dashboard.clerk.com](https://dashboard.clerk.com).
+2. Récupère :
+   - **Publishable key** (`pk_test_...` ou `pk_live_...`)
+   - **Secret key** (`sk_test_...` ou `sk_live_...`)
+3. Dans Clerk → **Domains**, ajoute l'URL Render (ex. `https://mon-planning.onrender.com`).
+
+## 3. Variables d'environnement
+
+### En local (fichier `.env` à la racine, non versionné)
+
 ```
-Crée un repo (privé si tu veux) sur GitHub et pousse dessus.
+NEON_DATABASE_URL=postgresql://...
+CLERK_SECRET_KEY=sk_test_...
+VITE_CLERK_PUBLISHABLE_KEY=pk_test_...
+```
 
-## 3. Déployer sur Render
+### Sur Render (Environment)
 
-1. render.com → New → Web Service → connecte ton repo GitHub.
+| Variable | Usage |
+|---|---|
+| `NEON_DATABASE_URL` | Connexion PostgreSQL Neon (runtime serveur) |
+| `CLERK_SECRET_KEY` | Auth API Express (runtime serveur) |
+| `VITE_CLERK_PUBLISHABLE_KEY` | Auth React Clerk (build Vite **et** runtime via `/env-config.js`) |
+
+Après toute modification de variable sur Render → **Manual Deploy** pour reconstruire.
+
+## 4. Déployer sur Render
+
+1. [render.com](https://render.com) → New → Web Service → repo GitHub `mike75008/mon-planning`.
 2. Configuration :
    - **Build Command** : `npm install && npm run build`
    - **Start Command** : `npm start`
-   - **Environment Variable** : `NEON_DATABASE_URL` = ta connection string Neon (étape 1)
-3. Déploie. Render te donne une URL du genre `mon-planning.onrender.com`.
+3. Ajoute les 3 variables d'environnement (étape 3).
+4. Déploie.
 
-C'est tout — ton app tourne, connectée à Neon, accessible depuis n'importe quel navigateur.
+## 5. Développement local
 
-## 4. L'installer comme une appli sur ton téléphone
+```bash
+npm install
+# Crée .env avec les 3 variables
+npm run dev          # frontend Vite (port 5173)
+npm run start:local  # serveur Express (port 3000) — dans un autre terminal
+```
 
-Ouvre l'URL Render sur ton tel (Safari sur iPhone, Chrome sur Android) →
-**Partager → Sur l'écran d'accueil**. Tu as une icône, plein écran, comme une vraie appli.
+## 6. Installer sur téléphone
 
-## Note sur le plan gratuit Render
+Ouvre l'URL Render → **Partager → Sur l'écran d'accueil**.
 
-Le plan gratuit met le service en veille après 15 min d'inactivité — le premier
-chargement après une pause peut prendre 20-30 secondes le temps qu'il se réveille.
-Si ça te gêne à l'usage quotidien, le plan payant (7$/mois) le garde toujours actif.
+## Note plan gratuit Render
 
-## Pour aller plus loin
-
-Une fois que c'est stable, tu pourras reprendre ce code dans Claude Code pour
-ajouter des blocs, changer les horaires, ou brancher des notifications — la structure
-(server/index.js + src/Dashboard.jsx) est volontairement simple pour rester facile
-à faire évoluer toi-même.
+Le service se met en veille après 15 min d'inactivité — le premier chargement peut prendre 20–30 s.

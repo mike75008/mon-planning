@@ -6,6 +6,7 @@ export default defineConfig({
   server: {
     proxy: {
       "/api": "http://localhost:3000",
+      "/env-config.js": "http://localhost:3000",
     },
   },
 });

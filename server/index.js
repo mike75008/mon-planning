@@ -1,5 +1,6 @@
 // Serveur Express — à déployer sur Render (Web Service)
-// Variables d'environnement requises : NEON_DATABASE_URL, CLERK_SECRET_KEY
+// Variables d'environnement requises :
+//   NEON_DATABASE_URL, CLERK_SECRET_KEY, VITE_CLERK_PUBLISHABLE_KEY
 const express = require("express");
 const path = require("path");
 const { neon } = require("@neondatabase/serverless");
@@ -8,6 +9,13 @@ const { clerkMiddleware, getAuth } = require("@clerk/express");
 const app = express();
 app.use(express.json());
 app.use(clerkMiddleware());
+
+if (!process.env.NEON_DATABASE_URL) {
+  console.error("NEON_DATABASE_URL manquante");
+}
+if (!process.env.CLERK_SECRET_KEY) {
+  console.error("CLERK_SECRET_KEY manquante");
+}
 
 const sql = neon(process.env.NEON_DATABASE_URL);
 
@@ -60,6 +68,18 @@ app.get("/api/week", requireAuth, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Injecte la clé Clerk au runtime (Render lit process.env au démarrage, pas seulement au build Vite)
+app.get("/env-config.js", (_req, res) => {
+  const publishableKey =
+    process.env.VITE_CLERK_PUBLISHABLE_KEY ||
+    process.env.CLERK_PUBLISHABLE_KEY ||
+    "";
+  res.type("application/javascript");
+  res.send(
+    `window.__ENV__=${JSON.stringify({ VITE_CLERK_PUBLISHABLE_KEY: publishableKey })};`
+  );
 });
 
 // Sert le frontend buildé (Vite -> dist/)

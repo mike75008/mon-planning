@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "start": "node --env-file=.env server/index.js"
+    "start": "node server/index.js",
+    "start:local": "node --env-file=.env server/index.js"
   },
   "dependencies": {
     "@clerk/express": "^2.1.38",
