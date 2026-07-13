@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { MapPin, MessageCircle, Phone, Send, Users, Video, X } from "lucide-react";
 import { useAuth, useUser } from "@clerk/react";
 import { useCallManager } from "./useCall.js";
+import { playMediaElement } from "./webrtcCall.js";
 
 const TABS = {
   messages: "messages",
@@ -194,21 +195,25 @@ function CallActionButtons({ onPhone, onVideo, size = 36 }) {
   );
 }
 
+function callStatusLabel(callState) {
+  if (callState.ringing) return "Sonnerie…";
+  if (callState.remoteReady) return "Connecté";
+  if (callState.connState === "connecting" || callState.iceState === "checking") return "Connexion…";
+  if (callState.connState === "failed") return "Échec connexion";
+  return "En attente…";
+}
+
 function ActiveCallOverlay({ callState, person, onEnd }) {
   const localRef = useRef(null);
   const remoteRef = useRef(null);
   const isVideo = callState.mode === "video";
 
   useEffect(() => {
-    if (localRef.current && callState.localStream) {
-      localRef.current.srcObject = callState.localStream;
-    }
+    if (callState.localStream) playMediaElement(localRef.current, callState.localStream);
   }, [callState.localStream]);
 
   useEffect(() => {
-    if (remoteRef.current && callState.remoteStream) {
-      remoteRef.current.srcObject = callState.remoteStream;
-    }
+    if (callState.remoteStream) playMediaElement(remoteRef.current, callState.remoteStream);
   }, [callState.remoteStream]);
 
   return (
@@ -220,12 +225,15 @@ function ActiveCallOverlay({ callState, person, onEnd }) {
         </div>
       ) : (
         <div style={{ padding: 24, textAlign: "center" }}>
+          <audio ref={remoteRef} autoPlay playsInline style={{ display: "none" }} />
           <div style={avatarStyle(person?.color || "#14B8A6", 56)}>{person?.name?.[0] || "?"}</div>
-          <div style={{ fontSize: 13, color: "#4ADE80", marginTop: 8 }}>Appel audio en cours…</div>
+          <div style={{ fontSize: 13, color: "#4ADE80", marginTop: 8 }}>Appel audio</div>
         </div>
       )}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", background: "#14171B" }}>
-        <div style={{ fontSize: 12, color: "#E7E9EC" }}>{person?.name || "Appel"} · {callState.ringing ? "Sonnerie…" : "Connecté"}</div>
+        <div style={{ fontSize: 12, color: "#E7E9EC" }}>
+          {person?.name || "Appel"} · {callStatusLabel(callState)}
+        </div>
         <button type="button" onClick={onEnd} style={{ width: 40, height: 40, borderRadius: "50%", border: "none", background: "#EF4444", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }} title="Raccrocher">
           <Phone size={16} style={{ transform: "rotate(135deg)" }} />
         </button>

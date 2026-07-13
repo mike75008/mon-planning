@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { attachLocalTracks, createPeerConnection, getLocalStream, normalizeSdp } from "./webrtcCall.js";
+import {
+  attachLocalTracks,
+  createPeerConnection,
+  getLocalStream,
+  normalizeSdp,
+} from "./webrtcCall.js";
 
 async function callApi(path, { token, method = "GET", body } = {}) {
   const headers = { Authorization: `Bearer ${token}` };
@@ -11,7 +16,7 @@ async function callApi(path, { token, method = "GET", body } = {}) {
   const res = await fetch(path, { method, headers, body: payload });
   const contentType = res.headers.get("content-type") || "";
   if (!contentType.includes("application/json")) {
-    throw new Error("API appels indisponible — redémarre le serveur ou attends le déploiement Render.");
+    throw new Error("API appels indisponible — attends le déploiement Render ou redémarre le serveur.");
   }
   const json = await res.json();
   if (!res.ok) throw new Error(json.error || "Erreur appel");
@@ -26,7 +31,8 @@ export function useCallManager({ getToken, userId, enabled, peopleById, onIncomi
   const localStreamRef = useRef(null);
   const lastEventIdRef = useRef(0);
   const iceQueueRef = useRef([]);
-  const handlingOfferRef = useRef(false);
+  const offerSentRef = useRef(false);
+  const roleRef = useRef(null);
 
   const cleanupMedia = useCallback(() => {
     if (localStreamRef.current) {
@@ -38,7 +44,8 @@ export function useCallManager({ getToken, userId, enabled, peopleById, onIncomi
       pcRef.current = null;
     }
     iceQueueRef.current = [];
-    handlingOfferRef.current = false;
+    offerSentRef.current = false;
+    roleRef.current = null;
   }, []);
 
   const endCall = useCallback(async () => {
@@ -69,57 +76,81 @@ export function useCallManager({ getToken, userId, enabled, peopleById, onIncomi
     }
   }, []);
 
-  const addIceCandidateSafe = useCallback(
-    async (pc, candidate) => {
-      if (!candidate) return;
-      if (!pc.remoteDescription?.type) {
-        iceQueueRef.current.push(candidate);
-        return;
-      }
-      try {
-        await pc.addIceCandidate(candidate);
-      } catch {
-        iceQueueRef.current.push(candidate);
-      }
-    },
-    []
-  );
+  const addIceCandidateSafe = useCallback(async (pc, candidate) => {
+    if (!candidate) return;
+    if (!pc.remoteDescription?.type) {
+      iceQueueRef.current.push(candidate);
+      return;
+    }
+    try {
+      await pc.addIceCandidate(candidate);
+    } catch {
+      iceQueueRef.current.push(candidate);
+    }
+  }, []);
 
-  const ensurePeerConnection = useCallback(
-    (call, token, stream) => {
-      if (pcRef.current) return pcRef.current;
-      const pc = createPeerConnection(
-        (remote) => {
-          setCallState((s) =>
-            s ? { ...s, remoteReady: true, remoteStream: remote, ringing: false } : s
-          );
-        },
-        async (candidate) => {
-          await callApi(`/api/chat/calls/${call.id}/signal`, {
-            token,
-            method: "POST",
-            body: { type: "ice", payload: candidate },
-          });
+  const setupPeerConnection = useCallback(async (call, token, stream) => {
+    if (pcRef.current) return pcRef.current;
+    const pc = createPeerConnection(
+      (remote) => {
+        setCallState((s) =>
+          s ? { ...s, remoteReady: true, remoteStream: remote, ringing: false, connState: "connected" } : s
+        );
+      },
+      async (candidate) => {
+        await callApi(`/api/chat/calls/${call.id}/signal`, {
+          token,
+          method: "POST",
+          body: { type: "ice", payload: candidate },
+        });
+      },
+      (connState, iceState) => {
+        setCallState((s) => (s ? { ...s, connState, iceState } : s));
+        if (connState === "failed" || iceState === "failed") {
+          setCallError("Connexion impossible — réseau bloqué. Réessaie en 4G ou autre Wi‑Fi.");
         }
-      );
-      pcRef.current = pc;
-      attachLocalTracks(pc, stream);
-      return pc;
+      }
+    );
+    pcRef.current = pc;
+    await attachLocalTracks(pc, stream);
+    return pc;
+  }, []);
+
+  const sendOffer = useCallback(
+    async (call, token) => {
+      if (offerSentRef.current || !localStreamRef.current) return;
+      offerSentRef.current = true;
+      const pc = await setupPeerConnection(call, token, localStreamRef.current);
+      const offer = await pc.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: call.mode === "video",
+      });
+      await pc.setLocalDescription(offer);
+      await callApi(`/api/chat/calls/${call.id}/signal`, {
+        token,
+        method: "POST",
+        body: { type: "offer", payload: pc.localDescription },
+      });
+      setCallState((s) => (s ? { ...s, connState: "connecting" } : s));
     },
-    []
+    [setupPeerConnection]
   );
 
   const handleOffer = useCallback(
     async (ev, call, token) => {
-      if (pcRef.current || handlingOfferRef.current) return;
+      if (pcRef.current) return;
       const sdp = normalizeSdp(ev.payload);
-      if (!sdp) return;
-      handlingOfferRef.current = true;
+      if (!sdp) {
+        setCallError("Offre d'appel invalide — réessaie.");
+        return;
+      }
       try {
-        const video = call.mode === "video";
-        const stream = await getLocalStream(video);
-        localStreamRef.current = stream;
-        const pc = ensurePeerConnection(call, token, stream);
+        let stream = localStreamRef.current;
+        if (!stream) {
+          stream = await getLocalStream(call.mode === "video");
+          localStreamRef.current = stream;
+        }
+        const pc = await setupPeerConnection(call, token, stream);
         await pc.setRemoteDescription(sdp);
         await flushIceQueue(pc);
         const answer = await pc.createAnswer();
@@ -129,35 +160,44 @@ export function useCallManager({ getToken, userId, enabled, peopleById, onIncomi
           method: "POST",
           body: { type: "answer", payload: pc.localDescription },
         });
-        setCallState({
-          id: call.id,
-          mode: call.mode,
-          role: "callee",
-          otherId: call.callerId,
-          localStream: stream,
-          remoteReady: false,
-          ringing: false,
-        });
-      } finally {
-        handlingOfferRef.current = false;
+        setCallState((s) =>
+          s
+            ? { ...s, localStream: stream, ringing: false, connState: "connecting" }
+            : {
+                id: call.id,
+                mode: call.mode,
+                role: "callee",
+                otherId: call.callerId,
+                localStream: stream,
+                remoteReady: false,
+                ringing: false,
+                connState: "connecting",
+              }
+        );
+      } catch (e) {
+        setCallError(e.message);
       }
     },
-    [ensurePeerConnection, flushIceQueue]
+    [flushIceQueue, setupPeerConnection]
   );
 
   const processSignalEvent = useCallback(
     async (ev, call, token) => {
       if (ev.userId === userId) return;
-      if (ev.type === "offer") {
-        await handleOffer(ev, call, token);
-      } else if (ev.type === "answer" && pcRef.current) {
-        const sdp = normalizeSdp(ev.payload);
-        if (!sdp) return;
-        await pcRef.current.setRemoteDescription(sdp);
-        await flushIceQueue(pcRef.current);
-        setCallState((s) => (s ? { ...s, ringing: false } : s));
-      } else if (ev.type === "ice" && pcRef.current) {
-        await addIceCandidateSafe(pcRef.current, ev.payload);
+      try {
+        if (ev.type === "offer") {
+          await handleOffer(ev, call, token);
+        } else if (ev.type === "answer" && pcRef.current) {
+          const sdp = normalizeSdp(ev.payload);
+          if (!sdp) return;
+          await pcRef.current.setRemoteDescription(sdp);
+          await flushIceQueue(pcRef.current);
+          setCallState((s) => (s ? { ...s, ringing: false, connState: "connecting" } : s));
+        } else if (ev.type === "ice" && pcRef.current) {
+          await addIceCandidateSafe(pcRef.current, ev.payload);
+        }
+      } catch (e) {
+        setCallError(e.message);
       }
     },
     [addIceCandidateSafe, flushIceQueue, handleOffer, userId]
@@ -168,18 +208,26 @@ export function useCallManager({ getToken, userId, enabled, peopleById, onIncomi
       const token = await getToken();
       if (!token) return;
       const json = await callApi(`/api/chat/calls/${callId}/signals?after=${lastEventIdRef.current}`, { token });
-      if (json.call?.status === "ended") {
+      const call = json.call;
+
+      if (call?.status === "ended") {
         cleanupMedia();
         setCallState(null);
         setIncomingCall(null);
         return;
       }
+
+      // Appelant : n'envoie l'offre WebRTC qu'après acceptation (status active)
+      if (roleRef.current === "caller" && call?.status === "active" && !offerSentRef.current) {
+        await sendOffer(call, token);
+      }
+
       for (const ev of json.events || []) {
         lastEventIdRef.current = Math.max(lastEventIdRef.current, ev.id);
-        await processSignalEvent(ev, json.call, token);
+        await processSignalEvent(ev, call, token);
       }
     },
-    [cleanupMedia, getToken, processSignalEvent]
+    [cleanupMedia, getToken, processSignalEvent, sendOffer]
   );
 
   const startOutgoingCall = useCallback(
@@ -189,22 +237,19 @@ export function useCallManager({ getToken, userId, enabled, peopleById, onIncomi
       try {
         const token = await getToken();
         const video = mode === "video";
+        const stream = await getLocalStream(video);
+        localStreamRef.current = stream;
+
         const { call } = await callApi("/api/chat/calls", {
           token,
           method: "POST",
           body: { otherUserId, mode: video ? "video" : "phone" },
         });
+
         lastEventIdRef.current = 0;
-        const stream = await getLocalStream(video);
-        localStreamRef.current = stream;
-        const pc = ensurePeerConnection(call, token, stream);
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        await callApi(`/api/chat/calls/${call.id}/signal`, {
-          token,
-          method: "POST",
-          body: { type: "offer", payload: pc.localDescription },
-        });
+        offerSentRef.current = false;
+        roleRef.current = "caller";
+
         setCallState({
           id: call.id,
           mode: call.mode,
@@ -213,6 +258,7 @@ export function useCallManager({ getToken, userId, enabled, peopleById, onIncomi
           localStream: stream,
           remoteReady: false,
           ringing: true,
+          connState: "waiting",
         });
       } catch (e) {
         setCallError(e.message);
@@ -220,7 +266,7 @@ export function useCallManager({ getToken, userId, enabled, peopleById, onIncomi
         setCallState(null);
       }
     },
-    [cleanupMedia, ensurePeerConnection, getToken]
+    [cleanupMedia, getToken]
   );
 
   const acceptIncoming = useCallback(async () => {
@@ -228,19 +274,31 @@ export function useCallManager({ getToken, userId, enabled, peopleById, onIncomi
     setCallError("");
     try {
       const token = await getToken();
+      const video = incomingCall.mode === "video";
+      const stream = await getLocalStream(video);
+      localStreamRef.current = stream;
+
       lastEventIdRef.current = 0;
+      offerSentRef.current = false;
+      roleRef.current = "callee";
+
       await callApi(`/api/chat/calls/${incomingCall.id}/accept`, { token, method: "POST" });
       const callId = incomingCall.id;
+      const callerId = incomingCall.callerId;
+      const callMode = incomingCall.mode;
       setIncomingCall(null);
+
       setCallState({
         id: callId,
-        mode: incomingCall.mode,
+        mode: callMode,
         role: "callee",
-        otherId: incomingCall.callerId,
-        localStream: null,
+        otherId: callerId,
+        localStream: stream,
         remoteReady: false,
         ringing: true,
+        connState: "waiting",
       });
+
       await pollSignals(callId);
     } catch (e) {
       setCallError(e.message);
@@ -280,7 +338,7 @@ export function useCallManager({ getToken, userId, enabled, peopleById, onIncomi
       }
     };
     checkIncoming();
-    const t = setInterval(checkIncoming, 1500);
+    const t = setInterval(checkIncoming, 1000);
     return () => {
       cancelled = true;
       clearInterval(t);
@@ -290,7 +348,7 @@ export function useCallManager({ getToken, userId, enabled, peopleById, onIncomi
   useEffect(() => {
     if (!callState?.id) return;
     pollSignals(callState.id);
-    const t = setInterval(() => pollSignals(callState.id), 1000);
+    const t = setInterval(() => pollSignals(callState.id), 500);
     return () => clearInterval(t);
   }, [callState?.id, pollSignals]);
 
