@@ -5,6 +5,7 @@ const fs = require("fs");
 const multer = require("multer");
 const { parsePlanningText, transcribeAudio, applyPlanningActions, localDateKey } = require("./planAssistant");
 const { initChatSchema, registerChatRoutes, ensureProfileForUser } = require("./chat");
+const { initCallSchema, registerCallRoutes } = require("./calls");
 const { neon } = require("@neondatabase/serverless");
 const { clerkMiddleware, getAuth } = require("@clerk/express");
 
@@ -218,7 +219,7 @@ const upload = multer({
       cb(null, `${Date.now()}-${safe}`);
     },
   }),
-  limits: { fileSize: 15 * 1024 * 1024 },
+  limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     if (file.mimetype.startsWith("image/") || file.mimetype.startsWith("video/")) cb(null, true);
     else cb(new Error("Seules les photos et vidéos sont autorisées"));
@@ -407,6 +408,7 @@ api.post("/plan/transcribe", requireAuth, (req, res) => {
 });
 
 registerChatRoutes(api, { sql, requireAuth, getClerkUser, clerkApi, logActivity });
+registerCallRoutes(api, { sql, requireAuth });
 
 api.post("/plan/apply", requireAuth, async (req, res) => {
   const { actions } = req.body || {};
@@ -613,6 +615,7 @@ const PORT = process.env.PORT || 3000;
 async function boot() {
   try {
     await initChatSchema(sql);
+    await initCallSchema(sql);
     console.log("Chat schema OK");
   } catch (err) {
     console.error("Chat schema:", err.message);

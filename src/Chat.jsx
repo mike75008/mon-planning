@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MapPin, MessageCircle, Phone, Send, Users, Video, X } from "lucide-react";
 import { useAuth, useUser } from "@clerk/react";
+import { useCallManager } from "./useCall.js";
 
 const TABS = {
   messages: "messages",
@@ -193,22 +194,55 @@ function CallActionButtons({ onPhone, onVideo, size = 36 }) {
   );
 }
 
-function CallPreviewOverlay({ person, mode, onClose }) {
-  if (!person || !mode) return null;
-  const isVideo = mode === "video";
+function ActiveCallOverlay({ callState, person, onEnd }) {
+  const localRef = useRef(null);
+  const remoteRef = useRef(null);
+  const isVideo = callState.mode === "video";
+
+  useEffect(() => {
+    if (localRef.current && callState.localStream) {
+      localRef.current.srcObject = callState.localStream;
+    }
+  }, [callState.localStream]);
+
+  useEffect(() => {
+    if (remoteRef.current && callState.remoteStream) {
+      remoteRef.current.srcObject = callState.remoteStream;
+    }
+  }, [callState.remoteStream]);
+
   return (
-    <div style={{ marginBottom: 12, borderRadius: 12, overflow: "hidden", border: "1px solid #22262D", background: isVideo ? "#0B0D10" : "#0F2417" }}>
-      <div style={{ height: isVideo ? 160 : 100, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, background: isVideo ? `radial-gradient(circle at center, ${person.color}33 0%, #0B0D10 70%)` : "#0F2417" }}>
-        <div style={avatarStyle(person.color, 56)}>{person.name[0]}</div>
-        <div style={{ fontSize: 13, fontWeight: 600, color: "#E7E9EC" }}>{person.name}</div>
-        <div style={{ fontSize: 11, color: isVideo ? "#93C5FD" : "#4ADE80" }}>
-          {isVideo ? "Appel vidéo — bientôt" : "Appel vocal — bientôt"}
+    <div style={{ marginBottom: 12, borderRadius: 12, overflow: "hidden", border: "1px solid #3B82F6", background: "#0B0D10" }}>
+      {isVideo ? (
+        <div style={{ position: "relative", height: 220, background: "#000" }}>
+          <video ref={remoteRef} autoPlay playsInline style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          <video ref={localRef} autoPlay playsInline muted style={{ position: "absolute", right: 8, bottom: 8, width: 88, height: 120, objectFit: "cover", borderRadius: 8, border: "2px solid #22262D" }} />
         </div>
-      </div>
-      <div style={{ display: "flex", justifyContent: "center", gap: 16, padding: "12px 16px", background: "#14171B" }}>
-        <button type="button" onClick={onClose} style={{ width: 44, height: 44, borderRadius: "50%", border: "none", background: "#EF4444", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }} title="Fermer">
-          <Phone size={18} style={{ transform: "rotate(135deg)" }} />
+      ) : (
+        <div style={{ padding: 24, textAlign: "center" }}>
+          <div style={avatarStyle(person?.color || "#14B8A6", 56)}>{person?.name?.[0] || "?"}</div>
+          <div style={{ fontSize: 13, color: "#4ADE80", marginTop: 8 }}>Appel audio en cours…</div>
+        </div>
+      )}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", background: "#14171B" }}>
+        <div style={{ fontSize: 12, color: "#E7E9EC" }}>{person?.name || "Appel"} · {callState.ringing ? "Sonnerie…" : "Connecté"}</div>
+        <button type="button" onClick={onEnd} style={{ width: 40, height: 40, borderRadius: "50%", border: "none", background: "#EF4444", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }} title="Raccrocher">
+          <Phone size={16} style={{ transform: "rotate(135deg)" }} />
         </button>
+      </div>
+    </div>
+  );
+}
+
+function IncomingCallBanner({ call, onAccept, onDecline }) {
+  return (
+    <div style={{ marginBottom: 12, padding: 12, borderRadius: 10, border: "1px solid #3B82F6", background: "#111E33" }}>
+      <div style={{ fontSize: 12, color: "#93C5FD", marginBottom: 8 }}>
+        {call.mode === "video" ? "Appel vidéo" : "Appel audio"} entrant — {call.callerName}
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button type="button" onClick={onAccept} style={{ flex: 1, padding: "8px 12px", borderRadius: 8, border: "none", background: "#22C55E", color: "#0B0D10", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>Accepter</button>
+        <button type="button" onClick={onDecline} style={{ flex: 1, padding: "8px 12px", borderRadius: 8, border: "1px solid #7F1D1D", background: "transparent", color: "#F87171", cursor: "pointer", fontSize: 12 }}>Refuser</button>
       </div>
     </div>
   );
@@ -261,7 +295,7 @@ function EphemeralVideoMessage({ msg, getToken, onExpired }) {
   if (gone || (!msg.mediaUrl && msg.ephemeral)) {
     return (
       <div style={{ fontSize: 11, color: "#64748B", fontStyle: "italic", padding: "6px 0" }}>
-        Note vidéo — disparue
+        Vidéo — disparue
       </div>
     );
   }
@@ -344,11 +378,11 @@ function PersonProfile({ person, onBack, onMessage, onPhone, onVideo }) {
   );
 }
 
-function VideoNotePanel({ ephemeral, setEphemeral, ephemeralMode, setEphemeralMode, onPickFile, busy, onClose }) {
+function VideoPanel({ ephemeral, setEphemeral, ephemeralMode, setEphemeralMode, onPickFile, busy, onClose }) {
   return (
     <div style={{ marginBottom: 10, padding: 12, borderRadius: 10, border: "1px solid #22262D", background: "#0B0D10" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        <div style={{ fontSize: 11, color: "#94A3B8", fontWeight: 600 }}>Note vidéo</div>
+        <div style={{ fontSize: 11, color: "#94A3B8", fontWeight: 600 }}>Vidéo</div>
         <button type="button" onClick={onClose} style={{ background: "none", border: "none", color: "#64748B", cursor: "pointer" }}>
           <X size={14} />
         </button>
@@ -368,8 +402,10 @@ function VideoNotePanel({ ephemeral, setEphemeral, ephemeralMode, setEphemeralMo
           ))}
         </select>
       )}
-      <label style={{ display: "block", fontSize: 11, color: "#64748B", marginBottom: 6 }}>Choisir une vidéo</label>
-      <input type="file" accept="video/*" disabled={busy} onChange={(e) => { const f = e.target.files?.[0]; if (f) onPickFile(f); e.target.value = ""; }} style={{ fontSize: 11, color: "#94A3B8", width: "100%" }} />
+      <label style={{ display: "block", fontSize: 11, color: "#64748B", marginBottom: 6 }}>Galerie</label>
+      <input type="file" accept="video/*" disabled={busy} onChange={(e) => { const f = e.target.files?.[0]; if (f) onPickFile(f); e.target.value = ""; }} style={{ fontSize: 11, color: "#94A3B8", width: "100%", marginBottom: 8 }} />
+      <label style={{ display: "block", fontSize: 11, color: "#64748B", marginBottom: 6 }}>Caméra</label>
+      <input type="file" accept="video/*" capture="environment" disabled={busy} onChange={(e) => { const f = e.target.files?.[0]; if (f) onPickFile(f); e.target.value = ""; }} style={{ fontSize: 11, color: "#94A3B8", width: "100%" }} />
       {busy && <div style={{ fontSize: 10, color: "#64748B", marginTop: 6 }}>Envoi…</div>}
     </div>
   );
@@ -388,7 +424,6 @@ export default function Chat() {
   const [messages, setMessages] = useState([]);
   const [threadOther, setThreadOther] = useState(null);
   const [draft, setDraft] = useState("");
-  const [callPreview, setCallPreview] = useState(null);
   const [busySend, setBusySend] = useState(false);
   const [threadError, setThreadError] = useState("");
   const [showVideoPanel, setShowVideoPanel] = useState(false);
@@ -404,7 +439,24 @@ export default function Chat() {
   const unreadTotal = people.reduce((n, p) => n + (p.unread || 0), 0);
   const selectedPerson = people.find((p) => p.id === selectedPersonId);
   const threadPerson = threadOther || people.find((p) => p.id === activeThreadId);
-  const callPerson = selectedPerson || threadPerson;
+  const peopleById = useMemo(() => Object.fromEntries(people.map((p) => [p.id, p])), [people]);
+  const isLocalhost = typeof window !== "undefined" && /localhost|127\.0\.0\.1/.test(window.location.hostname);
+
+  const {
+    callState,
+    incomingCall,
+    callError,
+    startOutgoingCall,
+    acceptIncoming,
+    declineIncoming,
+    endCall,
+  } = useCallManager({
+    getToken,
+    userId: user?.id,
+    enabled: isLoaded && !!user?.id,
+    peopleById,
+    onIncoming: () => setExpanded(true),
+  });
 
   const loadPeople = useCallback(async () => {
     if (!isLoaded) return;
@@ -546,7 +598,10 @@ export default function Chat() {
     }
   };
 
-  const startCall = (person, mode) => setCallPreview({ person, mode });
+  const startCall = (person, mode) => {
+    if (!person?.id) return;
+    startOutgoingCall(person.id, mode);
+  };
 
   const openThread = (id) => {
     setActiveThreadId(id);
@@ -598,6 +653,18 @@ export default function Chat() {
         )}
       </button>
 
+      {incomingCall && !callState && (
+        <div style={{ marginTop: 8, maxWidth: 420 }}>
+          <IncomingCallBanner call={incomingCall} onAccept={acceptIncoming} onDecline={declineIncoming} />
+        </div>
+      )}
+
+      {callState && !expanded && (
+        <div style={{ marginTop: 8, fontSize: 10, color: "#93C5FD" }}>
+          Appel en cours — ouvre Chat pour voir la vidéo
+        </div>
+      )}
+
       {expanded && (
         <div style={{ marginTop: 12, background: "linear-gradient(135deg, #0C2622 0%, #14171B 100%)", border: "1px solid #14B8A6", borderRadius: 14, padding: "16px 18px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
@@ -612,8 +679,8 @@ export default function Chat() {
                 setExpanded(false);
                 setSelectedPersonId(null);
                 setActiveThreadId(null);
-                setCallPreview(null);
                 setShowVideoPanel(false);
+                endCall();
               }}
               style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 8, border: "1px solid #22262D", background: "#0B0D10", color: "#64748B", cursor: "pointer" }}
             >
@@ -631,23 +698,35 @@ export default function Chat() {
 
           {peopleError && <div style={{ fontSize: 11, color: "#F87171", marginBottom: 10 }}>{peopleError}</div>}
 
+          {isLocalhost && (
+            <div style={{ fontSize: 10, color: "#EAB308", marginBottom: 10, lineHeight: 1.5 }}>
+              PC + smartphone : ouvre <strong>https://mon-planning-s4y6.onrender.com</strong> sur les deux appareils (localhost ne marche pas entre appareils).
+            </div>
+          )}
+
+          {callError && <div style={{ fontSize: 11, color: "#F87171", marginBottom: 8 }}>{callError}</div>}
+
+          {callState && (
+            <ActiveCallOverlay
+              callState={callState}
+              person={peopleById[callState.otherId] || threadPerson || selectedPerson}
+              onEnd={endCall}
+            />
+          )}
+
           {selectedPersonId && (
             <PersonProfile
               person={selectedPerson}
-              onBack={() => { setSelectedPersonId(null); setCallPreview(null); }}
+              onBack={() => { setSelectedPersonId(null); }}
               onMessage={openThread}
               onPhone={() => startCall(selectedPerson, "phone")}
               onVideo={() => startCall(selectedPerson, "video")}
             />
           )}
 
-          {callPreview && callPerson && selectedPersonId && (
-            <CallPreviewOverlay person={callPreview.person} mode={callPreview.mode} onClose={() => setCallPreview(null)} />
-          )}
-
           {activeThreadId && threadPerson && !selectedPersonId && (
             <div>
-              <button type="button" onClick={() => { setActiveThreadId(null); setCallPreview(null); setShowVideoPanel(false); }} style={{ fontSize: 11, color: "#64748B", background: "none", border: "none", cursor: "pointer", marginBottom: 12, padding: 0 }}>
+              <button type="button" onClick={() => { setActiveThreadId(null); setShowVideoPanel(false); endCall(); }} style={{ fontSize: 11, color: "#64748B", background: "none", border: "none", cursor: "pointer", marginBottom: 12, padding: 0 }}>
                 ← Conversations
               </button>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
@@ -662,10 +741,6 @@ export default function Chat() {
                 <CallActionButtons onPhone={() => startCall(threadPerson, "phone")} onVideo={() => startCall(threadPerson, "video")} />
               </div>
 
-              {callPreview && callPreview.person?.id === threadPerson.id && (
-                <CallPreviewOverlay person={callPreview.person} mode={callPreview.mode} onClose={() => setCallPreview(null)} />
-              )}
-
               <div style={{ maxHeight: 280, overflowY: "auto", padding: "4px 2px", marginBottom: 10 }}>
                 {messages.length === 0 ? (
                   <div style={{ fontSize: 12, color: "#64748B", padding: 12, textAlign: "center" }}>Aucun message — écris en premier.</div>
@@ -679,7 +754,7 @@ export default function Chat() {
               {threadError && <div style={{ fontSize: 11, color: "#F87171", marginBottom: 8 }}>{threadError}</div>}
 
               {showVideoPanel && (
-                <VideoNotePanel
+                <VideoPanel
                   ephemeral={videoEphemeral}
                   setEphemeral={setVideoEphemeral}
                   ephemeralMode={videoEphemeralMode}
@@ -695,7 +770,7 @@ export default function Chat() {
                   type="button"
                   onClick={() => setShowVideoPanel((v) => !v)}
                   style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 36, height: 36, borderRadius: "50%", border: showVideoPanel ? "1px solid #A855F7" : "1px solid #22262D", background: showVideoPanel ? "#221230" : "#14171B", color: showVideoPanel ? "#D8B4FE" : "#64748B", cursor: "pointer", flexShrink: 0 }}
-                  title="Note vidéo"
+                  title="Vidéo"
                 >
                   <Video size={15} />
                 </button>

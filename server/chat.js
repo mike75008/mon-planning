@@ -298,8 +298,8 @@ function registerChatRoutes(api, { sql, requireAuth, getClerkUser, clerkApi, log
               lastMsg =
                 m.msg_type === "video"
                   ? m.sender_id === req.userId
-                    ? "Note vidéo envoyée"
-                    : "Note vidéo"
+                    ? "Vidéo envoyée"
+                    : "Vidéo"
                   : m.body || "";
             } else if (m.ephemeral) {
               lastMsg = "Note expirée";
