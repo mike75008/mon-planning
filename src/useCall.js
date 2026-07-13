@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { attachLocalTracks, createPeerConnection, getLocalStream, normalizeSdp } from "./webrtcCall.js";
+import {
+  attachLocalTracks,
+  createPeerConnection,
+  getLocalStream,
+  normalizeSdp,
+  waitIceGathering,
+} from "./webrtcCall.js";
 
 async function callApi(path, { token, method = "GET", body } = {}) {
   const headers = { Authorization: `Bearer ${token}` };
@@ -24,6 +30,7 @@ export function useCallManager({ getToken, userId, enabled, peopleById, onIncomi
   const [callError, setCallError] = useState("");
   const pcRef = useRef(null);
   const localStreamRef = useRef(null);
+  const remoteStreamRef = useRef(null);
   const lastEventIdRef = useRef(0);
   const iceQueueRef = useRef([]);
   const handlingOfferRef = useRef(false);
@@ -33,6 +40,7 @@ export function useCallManager({ getToken, userId, enabled, peopleById, onIncomi
       localStreamRef.current.getTracks().forEach((t) => t.stop());
       localStreamRef.current = null;
     }
+    remoteStreamRef.current = null;
     if (pcRef.current) {
       pcRef.current.close();
       pcRef.current = null;
@@ -40,6 +48,38 @@ export function useCallManager({ getToken, userId, enabled, peopleById, onIncomi
     iceQueueRef.current = [];
     handlingOfferRef.current = false;
   }, []);
+
+  const mergeRemoteTrack = useCallback((track) => {
+    if (!track || track.readyState === "ended") return;
+    if (!remoteStreamRef.current) {
+      remoteStreamRef.current = new MediaStream();
+    }
+    const existing = remoteStreamRef.current.getTracks().find((t) => t.kind === track.kind);
+    if (existing) remoteStreamRef.current.removeTrack(existing);
+    remoteStreamRef.current.addTrack(track);
+    const snapshot = new MediaStream(remoteStreamRef.current.getTracks());
+    setCallState((s) =>
+      s
+        ? {
+            ...s,
+            remoteReady: true,
+            remoteStream: snapshot,
+            mediaTick: (s.mediaTick || 0) + 1,
+            ringing: false,
+          }
+        : s
+    );
+  }, []);
+
+  const syncReceivers = useCallback(
+    (pc) => {
+      if (!pc) return;
+      for (const receiver of pc.getReceivers()) {
+        if (receiver.track) mergeRemoteTrack(receiver.track);
+      }
+    },
+    [mergeRemoteTrack]
+  );
 
   const endCall = useCallback(async () => {
     const callId = callState?.id;
@@ -87,11 +127,7 @@ export function useCallManager({ getToken, userId, enabled, peopleById, onIncomi
       if (pcRef.current) return pcRef.current;
       const pc = await createPeerConnection(
         getToken,
-        (remote) => {
-          setCallState((s) =>
-            s ? { ...s, remoteReady: true, remoteStream: remote, ringing: false } : s
-          );
-        },
+        (track) => mergeRemoteTrack(track),
         async (candidate) => {
           await callApi(`/api/chat/calls/${call.id}/signal`, {
             token,
@@ -109,7 +145,7 @@ export function useCallManager({ getToken, userId, enabled, peopleById, onIncomi
       attachLocalTracks(pc, stream);
       return pc;
     },
-    [getToken]
+    [getToken, mergeRemoteTrack]
   );
 
   const handleOffer = useCallback(
@@ -130,6 +166,8 @@ export function useCallManager({ getToken, userId, enabled, peopleById, onIncomi
         await flushIceQueue(pc);
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
+        await waitIceGathering(pc);
+        syncReceivers(pc);
         await callApi(`/api/chat/calls/${call.id}/signal`, {
           token,
           method: "POST",
@@ -152,7 +190,7 @@ export function useCallManager({ getToken, userId, enabled, peopleById, onIncomi
         handlingOfferRef.current = false;
       }
     },
-    [ensurePeerConnection, flushIceQueue]
+    [ensurePeerConnection, flushIceQueue, syncReceivers]
   );
 
   const processSignalEvent = useCallback(
@@ -165,12 +203,13 @@ export function useCallManager({ getToken, userId, enabled, peopleById, onIncomi
         if (!sdp) return;
         await pcRef.current.setRemoteDescription(sdp);
         await flushIceQueue(pcRef.current);
+        syncReceivers(pcRef.current);
         setCallState((s) => (s ? { ...s, ringing: false } : s));
       } else if (ev.type === "ice" && pcRef.current) {
         await addIceCandidateSafe(pcRef.current, ev.payload);
       }
     },
-    [addIceCandidateSafe, flushIceQueue, handleOffer, userId]
+    [addIceCandidateSafe, flushIceQueue, handleOffer, syncReceivers, userId]
   );
 
   const pollSignals = useCallback(
@@ -210,6 +249,7 @@ export function useCallManager({ getToken, userId, enabled, peopleById, onIncomi
         const pc = await ensurePeerConnection(call, token, stream);
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
+        await waitIceGathering(pc);
         await callApi(`/api/chat/calls/${call.id}/signal`, {
           token,
           method: "POST",

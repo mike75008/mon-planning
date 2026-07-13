@@ -203,25 +203,28 @@ function ActiveCallOverlay({ callState, person, onEnd }) {
 
   useEffect(() => {
     if (localRef.current && callState.localStream) {
-      localRef.current.srcObject = callState.localStream;
+      playMediaElement(localRef.current, callState.localStream);
     }
   }, [callState.localStream]);
 
   useEffect(() => {
-    if (!callState.remoteStream) return;
-    if (remoteRef.current) remoteRef.current.srcObject = callState.remoteStream;
-    if (remoteAudioRef.current) {
-      remoteAudioRef.current.srcObject = callState.remoteStream;
-      playMediaElement(remoteAudioRef.current, callState.remoteStream);
-    }
-  }, [callState.remoteStream]);
+    const stream = callState.remoteStream;
+    if (!stream) return;
+    const play = () => {
+      playMediaElement(remoteRef.current, stream);
+      playMediaElement(remoteAudioRef.current, stream);
+    };
+    play();
+    stream.addEventListener("addtrack", play);
+    return () => stream.removeEventListener("addtrack", play);
+  }, [callState.remoteStream, callState.mediaTick]);
 
   return (
     <div style={{ marginBottom: 12, borderRadius: 12, overflow: "hidden", border: "1px solid #3B82F6", background: "#0B0D10" }}>
       <audio ref={remoteAudioRef} autoPlay playsInline style={{ display: "none" }} />
       {isVideo ? (
         <div style={{ position: "relative", height: 220, background: "#000" }}>
-          <video ref={remoteRef} autoPlay playsInline style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          <video ref={remoteRef} autoPlay playsInline muted={false} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
           <video ref={localRef} autoPlay playsInline muted style={{ position: "absolute", right: 8, bottom: 8, width: 88, height: 120, objectFit: "cover", borderRadius: 8, border: "2px solid #22262D" }} />
         </div>
       ) : (

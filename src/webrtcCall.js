@@ -49,7 +49,7 @@ export async function createPeerConnection(getToken, onRemoteTrack, onIce, onCon
     bundlePolicy: "max-bundle",
   });
   pc.ontrack = (ev) => {
-    if (ev.streams?.[0]) onRemoteTrack(ev.streams[0]);
+    if (ev.track) onRemoteTrack(ev.track);
   };
   pc.onicecandidate = (ev) => {
     if (ev.candidate) onIce(ev.candidate.toJSON());
@@ -58,6 +58,26 @@ export async function createPeerConnection(getToken, onRemoteTrack, onIce, onCon
     onConnectionState?.(pc.connectionState, pc.iceConnectionState);
   };
   return pc;
+}
+
+export function waitIceGathering(pc, timeoutMs = 4000) {
+  return new Promise((resolve) => {
+    if (pc.iceGatheringState === "complete") {
+      resolve();
+      return;
+    }
+    const done = () => {
+      if (pc.iceGatheringState === "complete") {
+        pc.removeEventListener("icegatheringstatechange", done);
+        resolve();
+      }
+    };
+    pc.addEventListener("icegatheringstatechange", done);
+    setTimeout(() => {
+      pc.removeEventListener("icegatheringstatechange", done);
+      resolve();
+    }, timeoutMs);
+  });
 }
 
 export async function getLocalStream(video) {
@@ -78,6 +98,7 @@ export async function getLocalStream(video) {
 
 export async function attachLocalTracks(pc, stream) {
   for (const track of stream.getTracks()) {
+    track.enabled = true;
     pc.addTrack(track, stream);
   }
 }
