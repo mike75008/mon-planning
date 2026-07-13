@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { MapPin, MessageCircle, Phone, Send, Users, Video, X } from "lucide-react";
 import { useAuth, useUser } from "@clerk/react";
 import { useCallManager } from "./useCall.js";
-import { playMediaElement } from "./webrtcCall.js";
+import JitsiCall from "./JitsiCall.jsx";
 
 const TABS = {
   messages: "messages",
@@ -195,47 +195,33 @@ function CallActionButtons({ onPhone, onVideo, size = 36 }) {
   );
 }
 
-function callStatusLabel(callState) {
-  if (callState.ringing) return "Sonnerie…";
-  if (callState.remoteReady) return "Connecté";
-  if (callState.connState === "connecting" || callState.iceState === "checking") return "Connexion…";
-  if (callState.connState === "failed") return "Échec connexion";
-  return "En attente…";
-}
-
-function ActiveCallOverlay({ callState, person, onEnd }) {
-  const localRef = useRef(null);
-  const remoteRef = useRef(null);
-  const isVideo = callState.mode === "video";
-
-  useEffect(() => {
-    if (callState.localStream) playMediaElement(localRef.current, callState.localStream);
-  }, [callState.localStream]);
-
-  useEffect(() => {
-    if (callState.remoteStream) playMediaElement(remoteRef.current, callState.remoteStream);
-  }, [callState.remoteStream]);
+function ActiveCallOverlay({ callState, person, displayName, onEnd }) {
+  if (!callState.inRoom) {
+    return (
+      <div style={{ marginBottom: 12, padding: 16, borderRadius: 12, border: "1px solid #3B82F6", background: "#111E33", textAlign: "center" }}>
+        <div style={{ fontSize: 13, color: "#93C5FD", marginBottom: 4 }}>
+          {callState.mode === "video" ? "Appel vidéo" : "Appel audio"} — {person?.name || "…"}
+        </div>
+        <div style={{ fontSize: 12, color: "#64748B" }}>Sonnerie… en attente de réponse</div>
+        <button type="button" onClick={onEnd} style={{ marginTop: 12, padding: "8px 16px", borderRadius: 8, border: "none", background: "#EF4444", color: "#fff", cursor: "pointer", fontSize: 12 }}>
+          Annuler
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div style={{ marginBottom: 12, borderRadius: 12, overflow: "hidden", border: "1px solid #3B82F6", background: "#0B0D10" }}>
-      {isVideo ? (
-        <div style={{ position: "relative", height: 220, background: "#000" }}>
-          <video ref={remoteRef} autoPlay playsInline style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-          <video ref={localRef} autoPlay playsInline muted style={{ position: "absolute", right: 8, bottom: 8, width: 88, height: 120, objectFit: "cover", borderRadius: 8, border: "2px solid #22262D" }} />
-        </div>
-      ) : (
-        <div style={{ padding: 24, textAlign: "center" }}>
-          <audio ref={remoteRef} autoPlay playsInline style={{ display: "none" }} />
-          <div style={avatarStyle(person?.color || "#14B8A6", 56)}>{person?.name?.[0] || "?"}</div>
-          <div style={{ fontSize: 13, color: "#4ADE80", marginTop: 8 }}>Appel audio</div>
-        </div>
-      )}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", background: "#14171B" }}>
-        <div style={{ fontSize: 12, color: "#E7E9EC" }}>
-          {person?.name || "Appel"} · {callStatusLabel(callState)}
-        </div>
-        <button type="button" onClick={onEnd} style={{ width: 40, height: 40, borderRadius: "50%", border: "none", background: "#EF4444", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }} title="Raccrocher">
-          <Phone size={16} style={{ transform: "rotate(135deg)" }} />
+      <JitsiCall
+        roomName={callState.roomName}
+        displayName={displayName}
+        audioOnly={callState.mode !== "video"}
+        onHangup={onEnd}
+      />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 14px", background: "#14171B" }}>
+        <div style={{ fontSize: 11, color: "#64748B" }}>{person?.name || "Appel"} · en cours</div>
+        <button type="button" onClick={onEnd} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: "#EF4444", color: "#fff", cursor: "pointer", fontSize: 11 }}>
+          Raccrocher
         </button>
       </div>
     </div>
@@ -460,7 +446,6 @@ export default function Chat() {
     endCall,
   } = useCallManager({
     getToken,
-    userId: user?.id,
     enabled: isLoaded && !!user?.id,
     peopleById,
     onIncoming: () => setExpanded(true),
@@ -718,6 +703,7 @@ export default function Chat() {
             <ActiveCallOverlay
               callState={callState}
               person={peopleById[callState.otherId] || threadPerson || selectedPerson}
+              displayName={user?.fullName || user?.username || "Moi"}
               onEnd={endCall}
             />
           )}
