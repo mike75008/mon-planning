@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useAuth } from "@clerk/react";
 import Dashboard from "./Dashboard.jsx";
 import Admin from "./Admin.jsx";
+import { preloadJitsi } from "./JitsiCall.jsx";
 
 export default function App() {
   const { getToken } = useAuth();
@@ -30,6 +31,10 @@ export default function App() {
       }
     })();
   }, [getToken]);
+
+  useEffect(() => {
+    preloadJitsi().catch(() => {});
+  }, []);
 
   useEffect(() => {
     let cancelled = false;

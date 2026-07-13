@@ -195,21 +195,20 @@ function CallActionButtons({ onPhone, onVideo, size = 36 }) {
   );
 }
 
-function ActiveCallOverlay({ callState, person, displayName, joining, onJoin, onEnd }) {
+function ActiveCallOverlay({ callState, person, displayName, onJoin, onEnd }) {
   if (!callState.inRoom) {
-    const waiting = !callState.canJoin;
+    const waiting = callState.role === "caller" && !callState.canJoin;
     return (
       <div style={{ marginBottom: 12, padding: 16, borderRadius: 12, border: "1px solid #3B82F6", background: "#111E33", textAlign: "center" }}>
         <div style={{ fontSize: 13, color: "#93C5FD", marginBottom: 4 }}>
           {callState.mode === "video" ? "Appel vidéo" : "Appel audio"} — {person?.name || "…"}
         </div>
         <div style={{ fontSize: 12, color: "#64748B", marginBottom: 12 }}>
-          {waiting ? "Sonnerie… en attente de réponse" : "Réponse reçue — appuie pour activer le micro"}
+          {waiting ? "Sonnerie…" : "Décroche pour parler"}
         </div>
         {!waiting && (
           <button
             type="button"
-            disabled={joining}
             onClick={onJoin}
             style={{
               marginBottom: 10,
@@ -218,14 +217,14 @@ function ActiveCallOverlay({ callState, person, displayName, joining, onJoin, on
               border: "none",
               background: "#22C55E",
               color: "#0B0D10",
-              cursor: joining ? "wait" : "pointer",
+              cursor: "pointer",
               fontSize: 13,
               fontWeight: 700,
               width: "100%",
               maxWidth: 280,
             }}
           >
-            {joining ? "Activation…" : "Rejoindre — autoriser le micro"}
+            Décrocher
           </button>
         )}
         <button type="button" onClick={onEnd} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "#EF4444", color: "#fff", cursor: "pointer", fontSize: 12 }}>
@@ -260,7 +259,7 @@ function IncomingCallBanner({ call, onAccept, onDecline }) {
         {call.mode === "video" ? "Appel vidéo" : "Appel audio"} entrant — {call.callerName}
       </div>
       <div style={{ display: "flex", gap: 8 }}>
-        <button type="button" onClick={onAccept} style={{ flex: 1, padding: "8px 12px", borderRadius: 8, border: "none", background: "#22C55E", color: "#0B0D10", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>Accepter</button>
+        <button type="button" onClick={onAccept} style={{ flex: 1, padding: "8px 12px", borderRadius: 8, border: "none", background: "#22C55E", color: "#0B0D10", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>Décrocher</button>
         <button type="button" onClick={onDecline} style={{ flex: 1, padding: "8px 12px", borderRadius: 8, border: "1px solid #7F1D1D", background: "transparent", color: "#F87171", cursor: "pointer", fontSize: 12 }}>Refuser</button>
       </div>
     </div>
@@ -465,10 +464,9 @@ export default function Chat() {
     callState,
     incomingCall,
     callError,
-    joining,
     startOutgoingCall,
     acceptIncoming,
-    joinCall,
+    decrocher,
     declineIncoming,
     endCall,
   } = useCallManager({
@@ -679,9 +677,15 @@ export default function Chat() {
         </div>
       )}
 
-      {callState && !expanded && (
-        <div style={{ marginTop: 8, fontSize: 10, color: "#93C5FD" }}>
-          Appel en cours — ouvre Chat pour voir la vidéo
+      {callState && (
+        <div style={{ marginTop: 8, maxWidth: expanded ? "none" : 420 }}>
+          <ActiveCallOverlay
+            callState={callState}
+            person={peopleById[callState.otherId] || threadPerson || selectedPerson}
+            displayName={user?.fullName || user?.username || "Moi"}
+            onJoin={decrocher}
+            onEnd={endCall}
+          />
         </div>
       )}
 
@@ -700,7 +704,6 @@ export default function Chat() {
                 setSelectedPersonId(null);
                 setActiveThreadId(null);
                 setShowVideoPanel(false);
-                endCall();
               }}
               style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 8, border: "1px solid #22262D", background: "#0B0D10", color: "#64748B", cursor: "pointer" }}
             >
@@ -726,17 +729,6 @@ export default function Chat() {
 
           {callError && <div style={{ fontSize: 11, color: "#F87171", marginBottom: 8 }}>{callError}</div>}
 
-          {callState && (
-            <ActiveCallOverlay
-              callState={callState}
-              person={peopleById[callState.otherId] || threadPerson || selectedPerson}
-              displayName={user?.fullName || user?.username || "Moi"}
-              joining={joining}
-              onJoin={joinCall}
-              onEnd={endCall}
-            />
-          )}
-
           {selectedPersonId && (
             <PersonProfile
               person={selectedPerson}
@@ -749,7 +741,7 @@ export default function Chat() {
 
           {activeThreadId && threadPerson && !selectedPersonId && (
             <div>
-              <button type="button" onClick={() => { setActiveThreadId(null); setShowVideoPanel(false); endCall(); }} style={{ fontSize: 11, color: "#64748B", background: "none", border: "none", cursor: "pointer", marginBottom: 12, padding: 0 }}>
+              <button type="button" onClick={() => { setActiveThreadId(null); setShowVideoPanel(false); }} style={{ fontSize: 11, color: "#64748B", background: "none", border: "none", cursor: "pointer", marginBottom: 12, padding: 0 }}>
                 ← Conversations
               </button>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>

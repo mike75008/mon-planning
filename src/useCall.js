@@ -21,28 +21,15 @@ function roomForCall(callId) {
   return `MonPlanning-${callId}`;
 }
 
-async function requestCallPermissions(video) {
-  if (!navigator.mediaDevices?.getUserMedia) {
-    throw new Error("Micro indisponible — utilise Chrome ou Safari récent.");
-  }
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: true, noiseSuppression: true },
-    video: video ? { facingMode: "user" } : false,
-  });
-  stream.getTracks().forEach((t) => t.stop());
-}
-
 export function useCallManager({ getToken, enabled, peopleById, onIncoming }) {
   const [callState, setCallState] = useState(null);
   const [incomingCall, setIncomingCall] = useState(null);
   const [callError, setCallError] = useState("");
-  const [joining, setJoining] = useState(false);
 
   const endCall = useCallback(async () => {
     const callId = callState?.id;
     setCallState(null);
     setIncomingCall(null);
-    setJoining(false);
     if (callId) {
       try {
         const token = await getToken();
@@ -70,9 +57,9 @@ export function useCallManager({ getToken, enabled, peopleById, onIncoming }) {
           role: "caller",
           otherId: otherUserId,
           roomName: roomForCall(call.id),
-          canJoin: false,
           inRoom: false,
           ringing: true,
+          canJoin: false,
         });
       } catch (e) {
         setCallError(e.message);
@@ -81,45 +68,34 @@ export function useCallManager({ getToken, enabled, peopleById, onIncoming }) {
     [getToken]
   );
 
-  const acceptIncoming = useCallback(async () => {
+  // Décrocher = monte Jitsi tout de suite (geste utilisateur encore valide)
+  const acceptIncoming = useCallback(() => {
     if (!incomingCall) return;
     setCallError("");
-    try {
-      const token = await getToken();
-      await callApi(`/api/chat/calls/${incomingCall.id}/accept`, { token, method: "POST" });
-      setCallState({
-        id: incomingCall.id,
-        mode: incomingCall.mode,
-        role: "callee",
-        otherId: incomingCall.callerId,
-        roomName: roomForCall(incomingCall.id),
-        canJoin: true,
-        inRoom: false,
-        ringing: false,
+    const snap = incomingCall;
+    setIncomingCall(null);
+    setCallState({
+      id: snap.id,
+      mode: snap.mode,
+      role: "callee",
+      otherId: snap.callerId,
+      roomName: roomForCall(snap.id),
+      inRoom: true,
+      ringing: false,
+    });
+    getToken().then((token) => {
+      if (!token) return;
+      callApi(`/api/chat/calls/${snap.id}/accept`, { token, method: "POST" }).catch((e) => {
+        setCallError(e.message);
       });
-      setIncomingCall(null);
-    } catch (e) {
-      setCallError(e.message);
-    }
+    });
   }, [getToken, incomingCall]);
 
-  const joinCall = useCallback(async () => {
-    if (!callState?.canJoin || callState.inRoom || joining) return;
+  const decrocher = useCallback(() => {
+    if (!callState || callState.inRoom) return;
     setCallError("");
-    setJoining(true);
-    try {
-      await requestCallPermissions(callState.mode === "video");
-      setCallState((s) => (s ? { ...s, inRoom: true } : s));
-    } catch (e) {
-      if (e.name === "NotAllowedError") {
-        setCallError("Autorise le micro (et la caméra) quand le navigateur le demande.");
-      } else {
-        setCallError(e.message);
-      }
-    } finally {
-      setJoining(false);
-    }
-  }, [callState, joining]);
+    setCallState((s) => (s ? { ...s, inRoom: true, ringing: false } : s));
+  }, [callState]);
 
   const declineIncoming = useCallback(async () => {
     if (!incomingCall) return;
@@ -132,8 +108,9 @@ export function useCallManager({ getToken, enabled, peopleById, onIncoming }) {
     setIncomingCall(null);
   }, [getToken, incomingCall]);
 
+  // Appelant : sait quand l'autre a décroché
   useEffect(() => {
-    if (!callState?.id || callState.role !== "caller" || callState.canJoin) return;
+    if (!callState?.id || callState.role !== "caller" || callState.inRoom) return;
     let cancelled = false;
     const poll = async () => {
       try {
@@ -142,10 +119,8 @@ export function useCallManager({ getToken, enabled, peopleById, onIncoming }) {
         const json = await callApi(`/api/chat/calls/${callState.id}`, { token });
         if (json.call?.status === "ended") {
           setCallState(null);
-          return;
-        }
-        if (json.call?.status === "active") {
-          setCallState((s) => (s ? { ...s, canJoin: true, ringing: false } : s));
+        } else if (json.call?.status === "active") {
+          setCallState((s) => (s && !s.canJoin ? { ...s, canJoin: true, ringing: false } : s));
         }
       } catch {
         /* ignore */
@@ -157,7 +132,7 @@ export function useCallManager({ getToken, enabled, peopleById, onIncoming }) {
       cancelled = true;
       clearInterval(t);
     };
-  }, [callState?.id, callState?.role, callState?.canJoin, getToken]);
+  }, [callState?.id, callState?.role, callState?.inRoom, getToken]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -192,10 +167,9 @@ export function useCallManager({ getToken, enabled, peopleById, onIncoming }) {
     callState,
     incomingCall,
     callError,
-    joining,
     startOutgoingCall,
     acceptIncoming,
-    joinCall,
+    decrocher,
     declineIncoming,
     endCall,
   };
