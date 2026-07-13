@@ -1,4 +1,4 @@
-const ICE_SERVERS = [
+const DEFAULT_ICE_SERVERS = [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun1.l.google.com:19302" },
   {
@@ -10,10 +10,44 @@ const ICE_SERVERS = [
     username: "openrelayproject",
     credential: "openrelayproject",
   },
+  {
+    urls: "turn:numb.viagenie.ca",
+    username: "webrtc@live.com",
+    credential: "webrtc",
+  },
 ];
 
-export function createPeerConnection(onRemoteTrack, onIce, onConnectionState) {
-  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS, iceCandidatePoolSize: 10 });
+let iceServersPromise = null;
+
+export function loadIceServers(getToken) {
+  if (!iceServersPromise) {
+    iceServersPromise = (async () => {
+      try {
+        const token = await getToken?.();
+        const headers = token ? { Authorization: `Bearer ${token}` } : {};
+        const res = await fetch("/api/chat/calls/ice", { headers });
+        if (res.ok) {
+          const json = await res.json();
+          if (Array.isArray(json.iceServers) && json.iceServers.length > 0) {
+            return json.iceServers;
+          }
+        }
+      } catch {
+        /* fallback */
+      }
+      return DEFAULT_ICE_SERVERS;
+    })();
+  }
+  return iceServersPromise;
+}
+
+export async function createPeerConnection(getToken, onRemoteTrack, onIce, onConnectionState) {
+  const iceServers = await loadIceServers(getToken);
+  const pc = new RTCPeerConnection({
+    iceServers,
+    iceCandidatePoolSize: 10,
+    bundlePolicy: "max-bundle",
+  });
   pc.ontrack = (ev) => {
     if (ev.streams?.[0]) onRemoteTrack(ev.streams[0]);
   };
@@ -28,16 +62,16 @@ export function createPeerConnection(onRemoteTrack, onIce, onConnectionState) {
 
 export async function getLocalStream(video) {
   if (!navigator.mediaDevices?.getUserMedia) {
-    throw new Error("Micro/caméra indisponible — ouvre l'app en HTTPS (pas localhost entre appareils).");
+    throw new Error("Micro ou caméra indisponible — utilise l'app en HTTPS sur Render.");
   }
   try {
     return await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true },
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       video: video ? { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } } : false,
     });
   } catch (e) {
-    if (e.name === "NotAllowedError") throw new Error("Autorise le micro (et la caméra) dans le navigateur.");
-    if (e.name === "NotFoundError") throw new Error("Micro ou caméra introuvable.");
+    if (e.name === "NotAllowedError") throw new Error("Autorise le micro (et la caméra) quand le navigateur le demande.");
+    if (e.name === "NotFoundError") throw new Error("Micro ou caméra introuvable sur cet appareil.");
     throw new Error(e.message || "Accès micro/caméra refusé.");
   }
 }
@@ -60,6 +94,6 @@ export async function playMediaElement(el, stream) {
   try {
     await el.play();
   } catch {
-    /* autoplay policy — user already interacted */
+    /* l'utilisateur a déjà cliqué */
   }
 }

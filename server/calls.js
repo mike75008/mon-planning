@@ -59,6 +59,38 @@ function registerCallRoutes(api, { sql, requireAuth }) {
     }
   });
 
+  api.get("/chat/calls/ice", requireAuth, (req, res) => {
+    const iceServers = [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" },
+      {
+        urls: [
+          "turn:openrelay.metered.ca:80",
+          "turn:openrelay.metered.ca:443",
+          "turn:openrelay.metered.ca:443?transport=tcp",
+        ],
+        username: "openrelayproject",
+        credential: "openrelayproject",
+      },
+      {
+        urls: "turn:numb.viagenie.ca",
+        username: "webrtc@live.com",
+        credential: "webrtc",
+      },
+    ];
+    const turnUrl = process.env.TURN_URL;
+    const turnUser = process.env.TURN_USERNAME;
+    const turnCred = process.env.TURN_CREDENTIAL;
+    if (turnUrl && turnUser && turnCred) {
+      iceServers.unshift({
+        urls: turnUrl.split(",").map((u) => u.trim()).filter(Boolean),
+        username: turnUser,
+        credential: turnCred,
+      });
+    }
+    res.json({ iceServers });
+  });
+
   api.get("/chat/calls/incoming", requireAuth, async (req, res) => {
     try {
       const rows = await sql`
