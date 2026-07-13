@@ -18,6 +18,15 @@ function loadJitsiScript() {
   });
 }
 
+async function ensureUnmuted(api) {
+  try {
+    const muted = await api.isAudioMuted();
+    if (muted) api.executeCommand("toggleAudio");
+  } catch {
+    /* ignore */
+  }
+}
+
 export default function JitsiCall({ roomName, displayName, audioOnly, onHangup }) {
   const containerRef = useRef(null);
   const apiRef = useRef(null);
@@ -39,18 +48,34 @@ export default function JitsiCall({ roomName, displayName, audioOnly, onHangup }
           configOverwrite: {
             startWithAudioMuted: false,
             startWithVideoMuted: !!audioOnly,
+            startSilent: false,
             prejoinPageEnabled: false,
             disableDeepLinking: true,
+            enableNoisyMicDetection: false,
+            enableNoAudioDetection: false,
+            constraints: {
+              audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+              video: audioOnly ? false : { facingMode: "user" },
+            },
           },
           interfaceConfigOverwrite: {
-            TOOLBAR_BUTTONS: ["microphone", "camera", "hangup", "fullscreen"],
+            TOOLBAR_BUTTONS: ["microphone", "camera", "hangup", "fullscreen", "tileview"],
             SHOW_JITSI_WATERMARK: false,
             SHOW_WATERMARK_FOR_GUESTS: false,
             MOBILE_APP_PROMO: false,
+            DISABLE_JOIN_LEAVE_NOTIFICATIONS: true,
           },
         });
 
         api.addListener("readyToClose", () => onHangup?.());
+        api.addListener("videoConferenceJoined", () => {
+          setTimeout(() => ensureUnmuted(api), 600);
+          setTimeout(() => ensureUnmuted(api), 2000);
+        });
+        api.addListener("audioMuteStatusChanged", ({ muted }) => {
+          if (muted) setTimeout(() => ensureUnmuted(api), 300);
+        });
+
         apiRef.current = api;
       } catch (e) {
         console.error("Jitsi:", e);

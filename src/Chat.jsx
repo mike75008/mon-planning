@@ -195,16 +195,41 @@ function CallActionButtons({ onPhone, onVideo, size = 36 }) {
   );
 }
 
-function ActiveCallOverlay({ callState, person, displayName, onEnd }) {
+function ActiveCallOverlay({ callState, person, displayName, joining, onJoin, onEnd }) {
   if (!callState.inRoom) {
+    const waiting = !callState.canJoin;
     return (
       <div style={{ marginBottom: 12, padding: 16, borderRadius: 12, border: "1px solid #3B82F6", background: "#111E33", textAlign: "center" }}>
         <div style={{ fontSize: 13, color: "#93C5FD", marginBottom: 4 }}>
           {callState.mode === "video" ? "Appel vidéo" : "Appel audio"} — {person?.name || "…"}
         </div>
-        <div style={{ fontSize: 12, color: "#64748B" }}>Sonnerie… en attente de réponse</div>
-        <button type="button" onClick={onEnd} style={{ marginTop: 12, padding: "8px 16px", borderRadius: 8, border: "none", background: "#EF4444", color: "#fff", cursor: "pointer", fontSize: 12 }}>
-          Annuler
+        <div style={{ fontSize: 12, color: "#64748B", marginBottom: 12 }}>
+          {waiting ? "Sonnerie… en attente de réponse" : "Réponse reçue — appuie pour activer le micro"}
+        </div>
+        {!waiting && (
+          <button
+            type="button"
+            disabled={joining}
+            onClick={onJoin}
+            style={{
+              marginBottom: 10,
+              padding: "10px 20px",
+              borderRadius: 8,
+              border: "none",
+              background: "#22C55E",
+              color: "#0B0D10",
+              cursor: joining ? "wait" : "pointer",
+              fontSize: 13,
+              fontWeight: 700,
+              width: "100%",
+              maxWidth: 280,
+            }}
+          >
+            {joining ? "Activation…" : "Rejoindre — autoriser le micro"}
+          </button>
+        )}
+        <button type="button" onClick={onEnd} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "#EF4444", color: "#fff", cursor: "pointer", fontSize: 12 }}>
+          {waiting ? "Annuler" : "Raccrocher"}
         </button>
       </div>
     );
@@ -440,8 +465,10 @@ export default function Chat() {
     callState,
     incomingCall,
     callError,
+    joining,
     startOutgoingCall,
     acceptIncoming,
+    joinCall,
     declineIncoming,
     endCall,
   } = useCallManager({
@@ -704,6 +731,8 @@ export default function Chat() {
               callState={callState}
               person={peopleById[callState.otherId] || threadPerson || selectedPerson}
               displayName={user?.fullName || user?.username || "Moi"}
+              joining={joining}
+              onJoin={joinCall}
               onEnd={endCall}
             />
           )}
