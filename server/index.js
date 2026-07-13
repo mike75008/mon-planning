@@ -4,6 +4,7 @@ const path = require("path");
 const fs = require("fs");
 const multer = require("multer");
 const { parsePlanningText, transcribeAudio, applyPlanningActions, localDateKey } = require("./planAssistant");
+const { initChatSchema, registerChatRoutes, ensureProfileForUser } = require("./chat");
 const { neon } = require("@neondatabase/serverless");
 const { clerkMiddleware, getAuth } = require("@clerk/express");
 
@@ -273,6 +274,7 @@ async function requireAdmin(req, res, next) {
 api.get("/me", requireAuth, async (req, res) => {
   try {
     const user = await getClerkUser(req.userId);
+    await ensureProfileForUser(sql, req.userId, user);
     const isAdmin = user?.public_metadata?.role === "admin";
     res.json({
       userId: req.userId,
@@ -403,6 +405,8 @@ api.post("/plan/transcribe", requireAuth, (req, res) => {
     }
   });
 });
+
+registerChatRoutes(api, { sql, requireAuth, getClerkUser, clerkApi, logActivity });
 
 api.post("/plan/apply", requireAuth, async (req, res) => {
   const { actions } = req.body || {};
@@ -605,9 +609,21 @@ app.get("*", (_req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
+
+async function boot() {
+  try {
+    await initChatSchema(sql);
+    console.log("Chat schema OK");
+  } catch (err) {
+    console.error("Chat schema:", err.message);
+  }
+}
+
+boot();
+
 const server = app.listen(PORT, () => {
   console.log(`Serveur lancé sur le port ${PORT}`);
-  console.log("API: /api/day, /api/week, /api/recap, /api/upload, /api/plan/*");
+  console.log("API: /api/day, /api/week, /api/recap, /api/upload, /api/plan/*, /api/chat/*");
 });
 
 server.on("error", (err) => {

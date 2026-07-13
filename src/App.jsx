@@ -19,10 +19,37 @@ export default function App() {
           const data = await res.json();
           setIsAdmin(!!data.isAdmin);
         }
+        if (token) {
+          fetch("/api/chat/presence", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}` },
+          }).catch(() => {});
+        }
       } catch {
         setIsAdmin(false);
       }
     })();
+  }, [getToken]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const ping = async () => {
+      try {
+        const token = await getToken();
+        if (!token || cancelled) return;
+        await fetch("/api/chat/presence", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      } catch {
+        /* ignore */
+      }
+    };
+    const t = setInterval(ping, 45000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
   }, [getToken]);
 
   if (screen === "admin") {
